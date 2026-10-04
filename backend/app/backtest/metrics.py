@@ -33,45 +33,52 @@ def calculate_portfolio_metrics(
     daily_returns = nav_series.pct_change().dropna()
     num_days = len(daily_returns)
 
-    # 1. Cumulative Return & CAGR
+    # 1. Cumulative Return & CAGR (from backtesting.py)
     start_nav = float(nav_series.iloc[0])
     end_nav = float(nav_series.iloc[-1])
     cum_return = (end_nav / start_nav) - 1.0 if start_nav > 0 else 0.0
 
-    years = max(num_days / 252.0, 0.05)
-    cagr = (end_nav / start_nav) ** (1.0 / years) - 1.0 if (start_nav > 0 and end_nav > 0) else 0.0
+    cagr = ((end_nav / start_nav) ** (252.0 / num_days) - 1.0) if (start_nav > 0 and end_nav > 0 and num_days > 0) else 0.0
 
     # 2. Annualized Volatility
     daily_vol = float(daily_returns.std())
     annual_vol = daily_vol * np.sqrt(252.0)
 
-    # 3. Sharpe Ratio
-    sharpe = (cagr - rf) / annual_vol if annual_vol > 1e-6 else 0.0
+    # 3. Sharpe Ratio (Annualized Sharpe from backtesting.py line 151)
+    if daily_vol > 1e-7:
+        sharpe = float(np.sqrt(252.0) * (daily_returns.mean() / daily_vol))
+    else:
+        sharpe = 0.0
 
     # 4. Downside Deviation & Sortino Ratio
     negative_returns = daily_returns[daily_returns < 0.0]
     downside_vol = float(negative_returns.std()) * np.sqrt(252.0) if len(negative_returns) > 1 else annual_vol
-    sortino = (cagr - rf) / downside_vol if downside_vol > 1e-6 else 0.0
+    sortino = (cagr - rf) / downside_vol if downside_vol > 1e-6 else sharpe
 
-    # 5. Maximum Drawdown & Calmar Ratio
+    # 5. Maximum Drawdown & Calmar Ratio (from backtesting.py line 169 & 171)
     peaks = nav_series.cummax()
     drawdowns = (nav_series - peaks) / peaks
     max_dd = float(abs(drawdowns.min())) if len(drawdowns) > 0 else 0.0
-    calmar = cagr / max_dd if max_dd > 1e-6 else 0.0
+    calmar = (cagr / max_dd) if max_dd > 1e-6 else 0.0
 
-    # 6. Win Rate
-    positive_days = int(np.sum(daily_returns > 0))
-    win_rate = positive_days / num_days if num_days > 0 else 0.0
+    # 6. Win & Loss Days (from backtesting.py lines 176-177)
+    winning_days = int(np.sum(daily_returns > 0))
+    losing_days = int(np.sum(daily_returns < 0))
+    win_rate = (winning_days / num_days) if num_days > 0 else 0.0
 
     return {
         "cagr": round(cagr * 100, 2),
         "annual_volatility": round(annual_vol * 100, 2),
-        "sharpe_ratio": round(sharpe, 2),
+        "sharpe_ratio": round(sharpe, 4),
         "sortino_ratio": round(sortino, 2),
-        "calmar_ratio": round(calmar, 2),
+        "calmar_ratio": round(calmar, 4),
         "max_drawdown": round(max_dd * 100, 2),
         "cumulative_return": round(cum_return * 100, 2),
         "win_rate": round(win_rate * 100, 2),
+        "winning_days": winning_days,
+        "losing_days": losing_days,
+        "initial_capital": round(start_nav, 2),
+        "final_capital": round(end_nav, 2),
         "turnover": round(turnover * 100, 2)
     }
 

@@ -5,6 +5,7 @@ Strategy Registry and Discovery.
 from typing import Dict, List, Type
 from backend.app.strategies.base import BaseStrategy
 from backend.app.strategies.custom_strategies import (
+    RMTMomentumStrategy,
     CrossSectionalMomentumStrategy,
     MovingAverageTrendStrategy,
     MeanReversionRSIStrategy,
@@ -12,6 +13,7 @@ from backend.app.strategies.custom_strategies import (
 )
 
 STRATEGY_REGISTRY: Dict[str, BaseStrategy] = {
+    RMTMomentumStrategy.id: RMTMomentumStrategy(),
     CrossSectionalMomentumStrategy.id: CrossSectionalMomentumStrategy(),
     MovingAverageTrendStrategy.id: MovingAverageTrendStrategy(),
     MeanReversionRSIStrategy.id: MeanReversionRSIStrategy(),
@@ -19,7 +21,7 @@ STRATEGY_REGISTRY: Dict[str, BaseStrategy] = {
 }
 
 def get_strategy(strategy_id: str) -> BaseStrategy:
-    return STRATEGY_REGISTRY.get(strategy_id, STRATEGY_REGISTRY["my_custom_strategy"])
+    return STRATEGY_REGISTRY.get(strategy_id, STRATEGY_REGISTRY[RMTMomentumStrategy.id])
 
 def list_strategies() -> List[Dict[str, str]]:
     return [

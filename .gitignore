@@ -16,19 +16,26 @@ env/
 ENV/
 __pycache__/
 *.py[cod]
-*$py.class
 .pytest_cache/
-.cache/
 *.egg-info/
-dist/
+.cache/*
+!.cache/market_data/
+.cache/market_data/*
+!.cache/market_data/nifty50_2019_2023.pkl
+!.cache/market_data/nifty50_recent.pkl
+
+/dist/
 build/
 .coverage
 htmlcov/
 
+!frontend/dist/
+!frontend/dist/**
+
 # Node & Frontend
 node_modules/
 frontend/node_modules/
-frontend/dist/
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

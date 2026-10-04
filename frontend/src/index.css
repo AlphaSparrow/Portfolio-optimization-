@@ -3,31 +3,108 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --bg-page: #f1f5f9;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f8fafc;
+    --bg-muted: #e2e8f0;
+    --bg-subtle: #f8fafc;
+    --border-color: #e2e8f0;
+    --border-hover: #cbd5e1;
+    --text-heading: #0f172a;
+    --text-body: #334155;
+    --text-muted: #64748b;
+    --text-dim: #94a3b8;
+    --accent-blue: #2563eb;
+    --accent-emerald: #059669;
+    --accent-rose: #e11d48;
+    --accent-amber: #d97706;
+    --accent-purple: #7c3aed;
+    --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+    --card-shadow-hover: 0 4px 14px -2px rgba(15, 23, 42, 0.08);
+  }
+
+  /* Twilight Charcoal Theme (Neither pitch black nor bright white) */
+  .theme-twilight {
+    --bg-page: #1a2230;
+    --bg-card: #232d3f;
+    --bg-card-hover: #2a364b;
+    --bg-muted: #303d54;
+    --bg-subtle: #1f2838;
+    --border-color: #334157;
+    --border-hover: #475569;
+    --text-heading: #f8fafc;
+    --text-body: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-dim: #64748b;
+    --accent-blue: #3b82f6;
+    --accent-emerald: #10b981;
+    --accent-rose: #f43f5e;
+    --accent-amber: #f59e0b;
+    --accent-purple: #8b5cf6;
+    --card-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.25);
+    --card-shadow-hover: 0 6px 18px -2px rgba(0, 0, 0, 0.35);
+  }
+
   body {
-    background-color: #080C14;
-    background-image: 
-      radial-gradient(ellipse 80% 50% at 50% -15%, rgba(59, 130, 246, 0.12), rgba(16, 185, 129, 0.04) 50%, transparent 80%);
-    background-attachment: fixed;
-    color: #F8FAFC;
+    background-color: var(--bg-page);
+    color: var(--text-body);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     min-height: 100vh;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 }
 
-/* Custom sleek scrollbar for fintech terminal tables */
+/* Animations */
+@keyframes fadeInSlide {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseRipple {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeInSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-pulse-ripple {
+  animation: pulseRipple 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Smooth sleek scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #080C14;
+  background: var(--bg-page);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1A263D;
+  background: var(--border-color);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3B82F6;
+  background: var(--text-dim);
 }

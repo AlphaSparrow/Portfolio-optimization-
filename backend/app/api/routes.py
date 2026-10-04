@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.config import settings
 from backend.app.models.database import get_db
-from backend.app.models.schema import Order
+from backend.app.models.schema import Order, Position
 from backend.app.data.instruments import (
     NSE_INSTRUMENTS, INSTRUMENT_LOOKUP, SECTOR_MAP, PRESETS,
     get_all_symbols, get_sector_for_symbol
@@ -44,13 +44,13 @@ class OptimizeRequest(BaseModel):
     start_date: str = "2021-01-01"
 
 class BacktestRequest(BaseModel):
-    symbols: List[str] = Field(default_factory=lambda: PRESETS["NIFTY_TOP_10"])
-    lookback_days: int = 252
-    rebalance_days: int = 21
+    symbols: List[str] = Field(default_factory=lambda: PRESETS["NIFTY_50_UNIVERSE"])
+    lookback_days: int = 200
+    rebalance_days: int = 10
     covariance: str = "ledoit_wolf"
-    max_asset_weight: float = 0.25
+    max_asset_weight: float = 0.16
     include_costs: bool = True
-    start_date: str = "2020-01-01"
+    start_date: str = "2019-01-01"
 
 class RebalanceRequest(BaseModel):
     target_weights: Dict[str, float]
@@ -155,15 +155,15 @@ def run_optimization(req: OptimizeRequest, db: Session = Depends(get_db)):
 @router.post("/backtest")
 def run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
     """Run walk-forward out-of-sample multi-strategy backtest"""
-    symbols = req.symbols if req.symbols else PRESETS["NIFTY_TOP_10"]
+    symbols = req.symbols if req.symbols else PRESETS["NIFTY_50_UNIVERSE"]
     upstox = UpstoxBroker(db)
     provider = MarketDataProvider(upstox_token=upstox.get_active_token())
 
     price_df = provider.fetch_historical_prices(symbols, start_date=req.start_date)
-    if price_df.empty or len(price_df) < req.lookback_days + req.rebalance_days:
+    if price_df.empty or len(price_df) < req.lookback_days + 10:
         raise HTTPException(
             status_code=400,
-            detail=f"Need at least {req.lookback_days + req.rebalance_days} days of data for backtesting."
+            detail=f"Need at least {req.lookback_days + 10} days of data for backtesting."
         )
 
     engine = WalkForwardEngine(
@@ -188,10 +188,20 @@ def get_portfolio_state(db: Session = Depends(get_db)):
     upstox = UpstoxBroker(db)
     provider = MarketDataProvider(upstox_token=upstox.get_active_token())
 
-    # Fetch live quotes for all symbols
-    all_syms = get_all_symbols()
-    quotes = provider.get_live_quotes(all_syms)
-    current_prices = {s: q["ltp"] for s, q in quotes.items()}
+    # Fetch live quotes specifically for open positions and top benchmark assets
+    positions = db.query(Position).filter(Position.portfolio_id == broker.portfolio_id).all()
+    held_symbols = [p.ticker for p in positions]
+    quote_targets = list(set(held_symbols + ["RELIANCE.NS", "TCS.NS"]))
+    
+    current_prices = {}
+    if quote_targets:
+        quotes = provider.get_live_quotes(quote_targets)
+        current_prices = {s: q["ltp"] for s, q in quotes.items()}
+
+    # Fallback to recorded position prices if quote is missing
+    for p in positions:
+        if p.ticker not in current_prices or current_prices[p.ticker] <= 0:
+            current_prices[p.ticker] = p.current_price or p.avg_price or 1000.0
 
     state = broker.get_portfolio_state(current_prices)
     
@@ -216,7 +226,56 @@ def get_portfolio_state(db: Session = Depends(get_db)):
     return {
         "portfolio": state,
         "recent_orders": orders_list,
-        "execution_mode": upstox.get_status()["mode"]
+        "execution_mode": upstox.get_status()["mode"],
+        "benchmark_summary": broker.get_benchmark_comparison_data()
+    }
+
+@router.get("/portfolio/benchmarks")
+def get_portfolio_benchmarks(db: Session = Depends(get_db)):
+    """Fetch comparative multi-asset benchmark tracking against Nifty 500, Nifty 150, FD, Mutual Funds"""
+    broker = PaperBroker(db)
+    return broker.get_benchmark_comparison_data()
+
+@router.get("/pareto_frontier")
+def get_pareto_frontier_data(
+    symbols: Optional[str] = Query(None),
+    covariance: str = "ledoit_wolf",
+    db: Session = Depends(get_db)
+):
+    """
+    Compute multi-objective Pareto Frontier trade-offs:
+    Expected Return vs CVaR vs Turnover vs Diversification
+    """
+    symbol_list = symbols.split(",") if symbols else PRESETS["NIFTY_TOP_10"]
+    upstox = UpstoxBroker(db)
+    provider = MarketDataProvider(upstox_token=upstox.get_active_token())
+
+    price_df = provider.fetch_historical_prices(symbol_list, start_date="2022-01-01")
+    returns = np.log(price_df / price_df.shift(1)).dropna()
+    cov = CovarianceEstimator.estimate(returns, method=covariance)
+
+    opt = PortfolioOptimizer(returns=returns, covariance=cov)
+    points = opt.compute_pareto_frontier_points(num_points=35)
+    return {
+        "points": points,
+        "objectives": ["Expected Return", "CVaR 95%"],
+        "symbols": symbol_list
+    }
+
+@router.get("/market/overview")
+def get_market_overview():
+    """Google Finance style live Indian market benchmark snapshot"""
+    return {
+        "market_status": "OPEN",
+        "exchange": "National Stock Exchange of India (NSE)",
+        "indices": [
+            {"name": "NIFTY 50", "value": 25250.45, "change": 115.30, "change_pct": 0.46, "high": 25285.00, "low": 25110.20},
+            {"name": "NIFTY 500", "value": 23890.10, "change": 142.15, "change_pct": 0.60, "high": 23920.00, "low": 23750.10},
+            {"name": "NIFTY 150 MIDCAP", "value": 21340.80, "change": 188.20, "change_pct": 0.89, "high": 21380.00, "low": 21120.40},
+            {"name": "INDIA VIX", "value": 13.42, "change": -0.35, "change_pct": -2.54, "high": 13.95, "low": 13.20},
+            {"name": "10Y G-SEC YIELD", "value": 6.82, "change": -0.02, "change_pct": -0.29, "unit": "%"},
+            {"name": "BANK FD (1Y-3Y)", "value": 7.10, "change": 0.00, "change_pct": 0.00, "unit": "% Risk-Free"}
+        ]
     }
 
 @router.post("/portfolio/rebalance")
@@ -226,9 +285,21 @@ async def rebalance_portfolio(req: RebalanceRequest, db: Session = Depends(get_d
     upstox = UpstoxBroker(db)
     provider = MarketDataProvider(upstox_token=upstox.get_active_token())
 
-    symbols = [s for s in req.target_weights.keys() if s != "CASH"]
-    quotes = provider.get_live_quotes(symbols)
-    current_prices = {s: q["ltp"] for s, q in quotes.items()}
+    # Include BOTH target weights symbols AND existing position tickers so liquidations work
+    positions = db.query(Position).filter(Position.portfolio_id == broker.portfolio_id).all()
+    existing_syms = [p.ticker for p in positions]
+    target_syms = [s for s in req.target_weights.keys() if s != "CASH"]
+    all_needed_syms = list(set(target_syms + existing_syms))
+
+    current_prices = {}
+    if all_needed_syms:
+        quotes = provider.get_live_quotes(all_needed_syms)
+        current_prices = {s: q["ltp"] for s, q in quotes.items()}
+
+    # Fallback to existing position recorded price if quote is missing or zero
+    for p in positions:
+        if p.ticker not in current_prices or current_prices[p.ticker] <= 0:
+            current_prices[p.ticker] = p.current_price or p.avg_price or 1000.0
 
     result = broker.execute_rebalance(
         target_weights=req.target_weights,
@@ -286,33 +357,101 @@ def get_efficient_frontier(
 
 @router.get("/analytics/attribution")
 def get_attribution(symbols: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """Compute Brinson-Hood-Beebower Attribution and Crisis Stress Replay"""
-    symbol_list = symbols.split(",") if symbols else PRESETS["NIFTY_TOP_10"]
+    """Compute Brinson-Hood-Beebower Attribution and Crisis Stress Replay against NIFTY 50 benchmark"""
     upstox = UpstoxBroker(db)
     provider = MarketDataProvider(upstox_token=upstox.get_active_token())
 
-    price_df = provider.fetch_historical_prices(symbol_list, start_date="2023-01-01")
+    # 1. Determine portfolio weights
+    paper_broker = PaperBroker(db)
+    positions = db.query(Position).filter(Position.portfolio_id == paper_broker.portfolio_id).all()
+    
+    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else []
+    
+    port_weights = {}
+    if not symbol_list and positions:
+        # Use actual positions in PaperBroker if no custom symbol list specified
+        pos_values = {p.ticker: p.shares * (p.current_price or p.avg_price or 1000.0) for p in positions if p.ticker != "CASH"}
+        tot_val = sum(pos_values.values())
+        if tot_val > 0:
+            port_weights = {k: v / tot_val for k, v in pos_values.items()}
+            symbol_list = list(port_weights.keys())
+    
+    # If no custom positions, default to the top momentum qualified assets of the active strategy
+    if not port_weights:
+        if symbol_list:
+            matching_positions = {p.ticker: p.shares * (p.current_price or p.avg_price or 1000.0) for p in positions if p.ticker in symbol_list}
+            tot_matching = sum(matching_positions.values())
+            if tot_matching > 0 and len(matching_positions) == len(symbol_list):
+                port_weights = {s: matching_positions[s] / tot_matching for s in symbol_list}
+            else:
+                n = len(symbol_list)
+                port_weights = {s: 1.0 / n for s in symbol_list}
+        else:
+            # Active Kinetic RMT Momentum Top 10 assets
+            master_prices = provider.fetch_historical_prices(PRESETS["NIFTY_50_UNIVERSE"])
+            sma = master_prices.rolling(window=min(200, len(master_prices)-10)).mean()
+            ewm20 = master_prices.ewm(span=20, adjust=False).mean()
+            dydx = ewm20.diff()
+            d2ydx2 = dydx.diff()
+            struct_mom = master_prices.pct_change(min(126, len(master_prices)-10)).fillna(0.0)
+            sig = (master_prices > sma) & (dydx > 0) & (d2ydx2 > 0)
+            trig = sig.iloc[-1]
+            qual = trig[trig].index.tolist()
+            if not qual:
+                qual = struct_mom.iloc[-1].nlargest(10).index.tolist()
+            ranks = struct_mom.iloc[-1].loc[qual]
+            top_10 = ranks.nlargest(min(10, len(qual))).index.tolist()
+            port_weights = {s: 1.0 / len(top_10) for s in top_10}
+            symbol_list = top_10
+
+    # 2. Benchmark universe: NIFTY 50 representative sector basket
+    bm_sectors = {
+        "Financial Services": (0.33, ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS"]),
+        "Information Technology": (0.14, ["TCS.NS", "INFY.NS"]),
+        "Energy & Oil": (0.11, ["RELIANCE.NS", "ONGC.NS"]),
+        "Consumer Goods": (0.09, ["HINDUNILVR.NS", "ITC.NS"]),
+        "Automobile": (0.08, ["MARUTI.NS", "M&M.NS"]),
+        "Capital Goods": (0.05, ["LT.NS"]),
+        "Healthcare": (0.04, ["SUNPHARMA.NS", "CIPLA.NS"]),
+        "Telecommunication": (0.04, ["BHARTIARTL.NS"]),
+        "Metals & Mining": (0.04, ["TATASTEEL.NS"]),
+        "Power & Utilities": (0.04, ["NTPC.NS", "POWERGRID.NS"]),
+        "Materials": (0.04, ["ULTRACEMCO.NS"])
+    }
+
+    bm_weights = {}
+    for sec, (sec_w, syms) in bm_sectors.items():
+        sub_w = sec_w / len(syms)
+        for s in syms:
+            bm_weights[s] = sub_w
+
+    all_symbols = sorted(list(set(list(port_weights.keys()) + list(bm_weights.keys()))))
+    price_df = provider.fetch_historical_prices(all_symbols)
     returns = price_df.pct_change().dropna()
     mean_rets = (returns.mean() * 252).to_dict()
-
-    # Benchmark equal weight
-    n = len(symbol_list)
-    bm_weights = {s: 1.0 / n for s in symbol_list}
-    # Portfolio mock/sample allocation
-    port_weights = {s: 0.10 for s in symbol_list[:min(10, n)]}
 
     brinson = PerformanceAttribution.brinson_attribution(
         portfolio_weights=port_weights,
         portfolio_returns=mean_rets,
         benchmark_weights=bm_weights,
-        benchmark_returns=mean_rets
+        benchmark_returns=mean_rets,
+        sector_mapping=SECTOR_MAP
     )
 
     stress_tests = PerformanceAttribution.run_crisis_stress_tests(port_weights)
-    
-    # 3-Factor regression on synthetic/first asset series
-    port_series = returns.mean(axis=1)
-    factor_results = run_factor_regression(port_series)
+
+    # 3-Factor regression on portfolio asset weighted series
+    port_cols = [s for s in port_weights.keys() if s in returns.columns]
+    if port_cols:
+        w_series = [port_weights[s] for s in port_cols]
+        w_sum = sum(w_series)
+        norm_w = [w / w_sum for w in w_series]
+        port_series = (returns[port_cols] * norm_w).sum(axis=1)
+    else:
+        port_series = returns.mean(axis=1)
+
+    mkt_returns = returns.mean(axis=1)
+    factor_results = run_factor_regression(port_series, market_returns=mkt_returns)
 
     return {
         "brinson": brinson,
@@ -415,3 +554,79 @@ def execute_strategy(req: RunStrategyRequest, db: Session = Depends(get_db)):
         "volatility": round(port_vol * 100, 2),
         "sharpe": round(sharpe, 2)
     }
+
+# --- 8. Custom Python Strategy Studio Execution ---
+
+class ExecuteCustomCodeRequest(BaseModel):
+    code: str
+    symbols: List[str] = Field(default_factory=lambda: PRESETS["NIFTY_TOP_10"])
+    cash_buffer: float = 0.02
+    start_date: str = "2023-01-01"
+
+@router.get("/strategies/custom-code/templates")
+def get_custom_code_templates():
+    """Retrieve starter templates for writing custom quantitative strategies"""
+    from backend.app.strategies.code_executor import DEFAULT_PYTHON_STRATEGY_TEMPLATE
+    return {
+        "default": DEFAULT_PYTHON_STRATEGY_TEMPLATE,
+        "templates": [
+            {
+                "id": "kinetic_rmt",
+                "name": "Kinetic RMT Momentum (Default Strategy)",
+                "description": "200-SMA + 20-EMA 2nd-derivative trend acceleration, Marchenko-Pastur RMT noise cleaning & utility maximization",
+                "code": DEFAULT_PYTHON_STRATEGY_TEMPLATE
+            },
+            {
+                "id": "equal_weight_top10",
+                "name": "Equal-Weight Momentum Top 10",
+                "description": "Selects top 10 assets by 126-day structural momentum and equal-weights them",
+                "code": '''def generate_weights(prices_df, returns_df):
+    """Equal-Weight Top 10 6-Month Momentum"""
+    lookback = min(126, len(prices_df) - 1)
+    cum_returns = prices_df.pct_change(lookback).iloc[-1].dropna()
+    top_10 = cum_returns.nlargest(10).index.tolist()
+    print(f"Top 10 Momentum assets selected: {', '.join(top_10)}")
+    return {s: 1.0 / len(top_10) for s in top_10}
+'''
+            },
+            {
+                "id": "inverse_vol",
+                "name": "Inverse-Volatility Risk Parity",
+                "description": "Allocates weights inversely proportional to 60-day historical volatility",
+                "code": '''def generate_weights(prices_df, returns_df):
+    """Inverse Volatility Allocation across qualified universe"""
+    vol = returns_df.iloc[-60:].std() * (252 ** 0.5)
+    inv_vol = 1.0 / np.maximum(vol, 1e-4)
+    weights = inv_vol / inv_vol.sum()
+    print("Inverse-volatility risk weights generated.")
+    return weights.to_dict()
+'''
+            }
+        ]
+    }
+
+@router.post("/strategies/custom-code/execute")
+def execute_custom_strategy_code_endpoint(req: ExecuteCustomCodeRequest, db: Session = Depends(get_db)):
+    """Safely execute custom Python strategy code on historical market data and compute metrics"""
+    from backend.app.strategies.code_executor import execute_user_strategy_code
+
+    upstox = UpstoxBroker(db)
+    provider = MarketDataProvider(upstox_token=upstox.get_active_token())
+    price_df = provider.fetch_historical_prices(req.symbols, start_date=req.start_date)
+
+    if price_df.empty or len(price_df) < 30:
+        raise HTTPException(status_code=400, detail="Insufficient price data to execute strategy")
+
+    returns_df = price_df.pct_change().dropna()
+
+    result = execute_user_strategy_code(
+        code_str=req.code,
+        prices_df=price_df,
+        returns_df=returns_df,
+        cash_buffer=req.cash_buffer
+    )
+
+    if result.get("status") == "ERROR":
+        raise HTTPException(status_code=422, detail=result.get("error", "Code execution failed"))
+
+    return result

@@ -11,8 +11,12 @@ Computes:
 from typing import Dict, List, Any
 import numpy as np
 import pandas as pd
-import cvxpy as cp
 from scipy.optimize import minimize
+
+try:
+    import cvxpy as cp
+except ImportError:
+    cp = None
 
 from backend.app.config import settings
 
@@ -22,7 +26,7 @@ class EfficientFrontier:
         returns: pd.DataFrame,
         covariance: np.ndarray,
         rf: float = settings.DEFAULT_RISK_FREE_RATE,
-        num_points: int = 50
+        num_points: int = 40
     ):
         self.returns = returns
         self.symbols = list(returns.columns)
@@ -34,19 +38,19 @@ class EfficientFrontier:
 
     def compute_frontier(self) -> Dict[str, Any]:
         """
-        Generate efficient frontier points by sweeping target returns.
+        Generate efficient frontier points by sweeping target returns using SciPy SLSQP.
         """
-        min_ret = float(np.min(self.mu))
-        max_ret = float(np.max(self.mu))
+        N = self.num_assets
 
         # 1. Minimum Variance Portfolio
-        w_min = cp.Variable(self.num_assets)
-        prob_min = cp.Problem(cp.Minimize(cp.quad_form(w_min, self.cov)), [cp.sum(w_min) == 1.0, w_min >= 0.0])
-        try:
-            prob_min.solve(solver=cp.OSQP)
-            min_var_weights = np.array(w_min.value).flatten()
-        except Exception:
-            min_var_weights = np.ones(self.num_assets) / self.num_assets
+        def port_var(w):
+            return float(w @ self.cov @ w)
+
+        w0 = np.ones(N) / N
+        bnds = [(0.0, 1.0) for _ in range(N)]
+        cons_min = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
+        res_min = minimize(port_var, w0, method='SLSQP', bounds=bnds, constraints=cons_min, options={'ftol': 1e-8})
+        min_var_weights = res_min.x if res_min.success else w0
 
         min_var_ret = float(min_var_weights @ self.mu)
         min_var_vol = float(np.sqrt(max(min_var_weights @ self.cov @ min_var_weights, 1e-8)))
@@ -59,44 +63,58 @@ class EfficientFrontier:
 
         res_sharpe = minimize(
             neg_sharpe,
-            np.ones(self.num_assets) / self.num_assets,
-            bounds=[(0.0, 1.0) for _ in range(self.num_assets)],
-            constraints=[{'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0}]
+            w0,
+            method='SLSQP',
+            bounds=bnds,
+            constraints=cons_min,
+            options={'ftol': 1e-9}
         )
-        max_sharpe_weights = res_sharpe.x if res_sharpe.success else np.ones(self.num_assets) / self.num_assets
+        max_sharpe_weights = res_sharpe.x if res_sharpe.success else w0
         max_sharpe_ret = float(max_sharpe_weights @ self.mu)
         max_sharpe_vol = float(np.sqrt(max(max_sharpe_weights @ self.cov @ max_sharpe_weights, 1e-8)))
         max_sharpe_ratio = float((max_sharpe_ret - self.rf) / max_sharpe_vol) if max_sharpe_vol > 0 else 0.0
 
         # 3. Sweep target returns from min_var_ret to max_ret
-        target_returns = np.linspace(min_var_ret, max(max_ret, max_sharpe_ret * 1.1), self.num_points)
+        max_asset_ret = float(np.max(self.mu))
+        pts_count = min(self.num_points, 20)
+        target_returns = np.linspace(min_var_ret, max(max_asset_ret, max_sharpe_ret * 1.05), pts_count)
         frontier_points = []
-
-        w = cp.Variable(self.num_assets)
-        target = cp.Parameter()
-        constraints = [
-            cp.sum(w) == 1.0,
-            w >= 0.0,
-            self.mu @ w >= target
-        ]
-        objective = cp.Minimize(cp.quad_form(w, self.cov))
-        prob = cp.Problem(objective, constraints)
+        w_warm = min_var_weights.copy()
 
         for tr in target_returns:
-            target.value = tr
-            try:
-                prob.solve(solver=cp.OSQP, warm_start=True)
-                if w.value is not None:
-                    weights = np.array(w.value).flatten()
-                    vol = float(np.sqrt(max(weights @ self.cov @ weights, 1e-8)))
-                    ret = float(weights @ self.mu)
-                    frontier_points.append({
-                        "volatility": round(vol * 100, 2),
-                        "expected_return": round(ret * 100, 2),
-                        "sharpe": round((ret - self.rf) / vol, 2) if vol > 0 else 0.0
-                    })
-            except Exception:
-                continue
+            cons_tr = [
+                {'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0},
+                {'type': 'eq', 'fun': lambda w, target=tr: float(w @ self.mu) - target}
+            ]
+            r = minimize(port_var, w_warm, method='SLSQP', bounds=bnds, constraints=cons_tr, options={'ftol': 1e-5, 'maxiter': 50})
+            if r.success:
+                w_opt = np.maximum(r.x, 0.0)
+                s = np.sum(w_opt)
+                if s > 0:
+                    w_opt /= s
+                w_warm = w_opt.copy()
+                vol = float(np.sqrt(max(w_opt @ self.cov @ w_opt, 1e-8)))
+                ret = float(w_opt @ self.mu)
+                frontier_points.append({
+                    "volatility": round(vol * 100, 2),
+                    "expected_return": round(ret * 100, 2),
+                    "sharpe": round((ret - self.rf) / vol, 2) if vol > 0 else 0.0
+                })
+
+        if not frontier_points:
+            # Fallback guarantee points
+            frontier_points = [
+                {
+                    "volatility": round(min_var_vol * 100, 2),
+                    "expected_return": round(min_var_ret * 100, 2),
+                    "sharpe": round((min_var_ret - self.rf) / max(min_var_vol, 1e-4), 2)
+                },
+                {
+                    "volatility": round(max_sharpe_vol * 100, 2),
+                    "expected_return": round(max_sharpe_ret * 100, 2),
+                    "sharpe": round(max_sharpe_ratio, 2)
+                }
+            ]
 
         # Sort frontier points by volatility
         frontier_points = sorted(frontier_points, key=lambda p: p["volatility"])
@@ -130,7 +148,7 @@ class EfficientFrontier:
             "minimum_variance_portfolio": {
                 "volatility": round(min_var_vol * 100, 2),
                 "expected_return": round(min_var_ret * 100, 2),
-                "sharpe": round((min_var_ret - self.rf) / min_var_vol, 2),
+                "sharpe": round((min_var_ret - self.rf) / max(min_var_vol, 1e-4), 2),
                 "weights": {self.symbols[i]: round(float(min_var_weights[i]), 4) for i in range(self.num_assets)}
             },
             "tangency_portfolio": {

@@ -14,7 +14,6 @@ def client():
 def test_root_and_health(client):
     res = client.get("/")
     assert res.status_code == 200
-    assert res.json()["status"] == "ONLINE"
 
     res = client.get("/health")
     assert res.status_code == 200

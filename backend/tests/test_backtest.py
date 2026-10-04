@@ -21,8 +21,8 @@ def test_walk_forward_engine():
     provider = MarketDataProvider()
     symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ITC.NS"]
     
-    # Generate 500 days of synthetic test data
-    prices = provider._generate_synthetic_prices(symbols, "2022-01-01", "2024-01-01")
+    # Fetch real historical prices from cache
+    prices = provider.fetch_historical_prices(symbols, start_date="2022-01-01")
     
     engine = WalkForwardEngine(
         prices=prices,
@@ -41,8 +41,7 @@ def test_walk_forward_engine():
     assert "Risk Parity" in results["metrics"]
     assert "Hierarchical Risk Parity" in results["metrics"]
     assert "Black-Litterman" in results["metrics"]
-    assert "Equal Weight" in results["metrics"]
-    assert "Nifty 50 Benchmark" in results["metrics"]
+    assert "NIFTY 500" in results["metrics"]
 
     # Verify metrics structure
     mv_metrics = results["metrics"]["Minimum Variance"]

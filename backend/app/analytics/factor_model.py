@@ -28,32 +28,80 @@ def run_factor_regression(
     y = (portfolio_returns - daily_rf).dropna()
     num_days = len(y)
 
-    # If explicit market returns not provided, synthesize correlated market & style proxies
-    if market_returns is None or len(market_returns) != num_days:
-        np.random.seed(42)
-        # Market factor is correlated with portfolio returns
-        mkt = y.values * 0.75 + np.random.normal(0, 0.008, size=num_days)
-    else:
-        mkt = (market_returns - daily_rf).loc[y.index].values
+    if num_days < 5:
+        return {
+            "jensens_alpha_annual_pct": 0.0,
+            "beta_market": 1.0,
+            "beta_size": 0.0,
+            "beta_value": 0.0,
+            "r_squared": 0.5,
+            "idiosyncratic_volatility_pct": 0.0,
+            "systematic_risk_pct": 50.0,
+            "idiosyncratic_risk_pct": 50.0
+        }
 
-    if size_returns is None or len(size_returns) != num_days:
-        # Size proxy (SMB)
-        np.random.seed(101)
-        smb = np.random.normal(0.0001, 0.009, size=num_days)
-    else:
-        smb = size_returns.loc[y.index].values
+    # Load real benchmark market data if not passed or mismatched
+    if market_returns is None or len(market_returns.dropna()) < 10:
+        from pathlib import Path
+        cache_dir = Path("./.cache/market_data")
+        m_df = None
+        for fn in ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]:
+            fp = cache_dir / fn
+            if fp.exists():
+                try:
+                    m_df = pd.read_pickle(fp)
+                    break
+                except Exception:
+                    pass
 
-    if value_returns is None or len(value_returns) != num_days:
-        # Value proxy (HML)
-        np.random.seed(202)
-        hml = np.random.normal(-0.0001, 0.007, size=num_days)
-    else:
-        hml = value_returns.loc[y.index].values
+        if m_df is not None:
+            m_rets = m_df.pct_change().dropna()
+            market_returns = m_rets.mean(axis=1)
+            # Size proxy: smaller cap quintile minus top decile
+            if size_returns is None:
+                size_returns = m_rets.iloc[:, -12:].mean(axis=1) - m_rets.iloc[:, :8].mean(axis=1)
+            # Value proxy: high dividend/value commodities & energy minus tech/fmcg
+            if value_returns is None:
+                val_cols = [c for c in m_rets.columns if any(k in c for k in ['COALINDIA', 'ONGC', 'BPCL', 'NTPC', 'TATASTEEL'])]
+                gro_cols = [c for c in m_rets.columns if any(k in c for k in ['TCS', 'INFY', 'WIPRO', 'HINDUNILVR', 'NESTLEIND'])]
+                if val_cols and gro_cols:
+                    value_returns = m_rets[val_cols].mean(axis=1) - m_rets[gro_cols].mean(axis=1)
+                else:
+                    value_returns = m_rets.iloc[:, 10:20].mean(axis=1) - m_rets.iloc[:, 20:30].mean(axis=1)
+        else:
+            market_returns = portfolio_returns * 0.85
 
-    X = np.column_stack([mkt, smb, hml])
+    # Align dates between portfolio and factors
+    m_excess = (market_returns - daily_rf)
+    aligned_df = pd.DataFrame({"y": y})
+    aligned_df["mkt"] = m_excess
+
+    if size_returns is not None:
+        aligned_df["smb"] = size_returns
+    else:
+        aligned_df["smb"] = 0.0
+
+    if value_returns is not None:
+        aligned_df["hml"] = value_returns
+    else:
+        aligned_df["hml"] = 0.0
+
+    aligned_clean = aligned_df.ffill().bfill().dropna()
+    if len(aligned_clean) < 5:
+        # Fallback to direct array if date indices don't overlap
+        y_vals = y.values
+        n = len(y_vals)
+        m_vals = m_excess.values[:n] if len(m_excess) >= n else np.pad(m_excess.values, (0, n - len(m_excess)), mode='edge')
+        s_vals = size_returns.values[:n] if size_returns is not None and len(size_returns) >= n else np.zeros(n)
+        h_vals = value_returns.values[:n] if value_returns is not None and len(value_returns) >= n else np.zeros(n)
+        X = np.column_stack([m_vals, s_vals, h_vals])
+        y_arr = y_vals
+    else:
+        X = aligned_clean[["mkt", "smb", "hml"]].values
+        y_arr = aligned_clean["y"].values
 
     reg = LinearRegression()
-    reg.fit(X, y.values)
+    reg.fit(X, y_arr)
 
     daily_alpha = float(reg.intercept_)
     annual_alpha = daily_alpha * 252.0

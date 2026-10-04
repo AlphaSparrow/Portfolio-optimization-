@@ -4,7 +4,7 @@ FastAPI Application Entrypoint for Quantitative Portfolio Optimization & Live Pa
 
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
@@ -43,15 +43,9 @@ app.add_middleware(
 
 app.include_router(router)
 
-@app.get("/")
-def root():
-    return {
-        "status": "ONLINE",
-        "service": settings.APP_NAME,
-        "version": settings.VERSION,
-        "docs": "/docs",
-        "api_endpoints": "/api"
-    }
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
 @app.get("/health")
 def health_check():
@@ -60,6 +54,35 @@ def health_check():
         "database": "connected",
         "upstox_configured": bool(settings.UPSTOX_API_KEY)
     }
+
+frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if frontend_dist.exists() and (frontend_dist / "index.html").exists():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/")
+    def root():
+        return FileResponse(str(frontend_dist / "index.html"))
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api") or full_path in ["health", "docs", "redoc", "openapi.json"]:
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        target_file = frontend_dist / full_path
+        if full_path and target_file.is_file():
+            return FileResponse(str(target_file))
+        return FileResponse(str(frontend_dist / "index.html"))
+else:
+    @app.get("/")
+    def root():
+        return {
+            "status": "ONLINE",
+            "service": settings.APP_NAME,
+            "version": settings.VERSION,
+            "docs": "/docs",
+            "api_endpoints": "/api"
+        }
 
 if __name__ == "__main__":
     import uvicorn

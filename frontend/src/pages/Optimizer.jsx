@@ -13,10 +13,14 @@ import {
   Sparkles,
   Layers,
   Terminal,
-  FileCode2
+  FileCode2,
+  Award,
+  Cpu
 } from 'lucide-react';
 import EfficientFrontierChart from '../components/EfficientFrontierChart';
 import AllocationDonut from '../components/AllocationDonut';
+import ParetoFrontierExplorer from '../components/ParetoFrontierExplorer';
+import PythonStrategyStudio from '../components/PythonStrategyStudio';
 import {
   fetchInstruments,
   optimizePortfolio,
@@ -27,15 +31,29 @@ import {
 } from '../api';
 
 export default function Optimizer({ setActiveTab, onRebalanceDone }) {
-  const [activeMode, setActiveMode] = useState('math'); // 'math' | 'strategy'
+  const [activeMode, setActiveMode] = useState('math'); // 'math' | 'strategy' | 'pareto'
   const [instruments, setInstruments] = useState([]);
   const [presets, setPresets] = useState({});
-  const [selectedSymbols, setSelectedSymbols] = useState([
-    'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
-    'HINDUNILVR.NS', 'ITC.NS', 'SBIN.NS', 'BHARTIARTL.NS', 'LT.NS'
-  ]);
-  const [optimizer, setOptimizer] = useState('maximum_sharpe');
-  const [covariance, setCovariance] = useState('ledoit_wolf');
+  const [selectedSymbols, setSelectedSymbols] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('quant_selected_symbols');
+      return saved ? JSON.parse(saved) : [
+        'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
+        'HINDUNILVR.NS', 'ITC.NS', 'SBIN.NS', 'BHARTIARTL.NS', 'LT.NS'
+      ];
+    } catch {
+      return [
+        'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
+        'HINDUNILVR.NS', 'ITC.NS', 'SBIN.NS', 'BHARTIARTL.NS', 'LT.NS'
+      ];
+    }
+  });
+  const [optimizer, setOptimizer] = useState(() => {
+    return sessionStorage.getItem('quant_optimizer') || 'rmt_momentum';
+  });
+  const [covariance, setCovariance] = useState(() => {
+    return sessionStorage.getItem('quant_covariance') || 'ledoit_wolf';
+  });
   const [maxAssetWeight, setMaxAssetWeight] = useState(0.25);
   const [maxSectorWeight, setMaxSectorWeight] = useState(0.35);
   const [cashBuffer, setCashBuffer] = useState(0.02);
@@ -47,15 +65,47 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
 
   // Custom strategies state
   const [availableStrategies, setAvailableStrategies] = useState([]);
-  const [selectedStrategyId, setSelectedStrategyId] = useState('my_custom_strategy');
+  const [selectedStrategyId, setSelectedStrategyId] = useState('rmt_momentum_default');
   const [strategyResult, setStrategyResult] = useState(null);
 
   const [loading, setLoading] = useState(false);
   const [rebalancing, setRebalancing] = useState(false);
-  const [optResult, setOptResult] = useState(null);
-  const [frontierData, setFrontierData] = useState(null);
+  const [optResult, setOptResult] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('quant_opt_result');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [frontierData, setFrontierData] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('quant_frontier_data');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [rebalanceMsg, setRebalanceMsg] = useState(null);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('quant_selected_symbols', JSON.stringify(selectedSymbols));
+    } catch {}
+  }, [selectedSymbols]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('quant_optimizer', optimizer);
+    } catch {}
+  }, [optimizer]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('quant_covariance', covariance);
+    } catch {}
+  }, [covariance]);
 
   useEffect(() => {
     fetchInstruments()
@@ -106,21 +156,31 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
     setRebalanceMsg(null);
 
     try {
-      // 1. Run optimization
-      const res = await optimizePortfolio({
-        symbols: selectedSymbols,
-        optimizer,
-        covariance,
-        max_asset_weight: Number(maxAssetWeight),
-        max_sector_weight: Number(maxSectorWeight),
-        cash_buffer: Number(cashBuffer),
-        views: Object.keys(views).length > 0 ? views : undefined
-      });
+      const [res, frontierRes] = await Promise.all([
+        optimizePortfolio({
+          symbols: selectedSymbols,
+          optimizer,
+          covariance,
+          max_asset_weight: Number(maxAssetWeight),
+          max_sector_weight: Number(maxSectorWeight),
+          cash_buffer: Number(cashBuffer),
+          views: Object.keys(views).length > 0 ? views : undefined
+        }),
+        getEfficientFrontier(selectedSymbols, covariance).catch((err) => {
+          console.warn('Frontier fetch notice:', err);
+          return null;
+        })
+      ]);
       setOptResult(res);
-
-      // 2. Fetch Efficient Frontier
-      const frontierRes = await getEfficientFrontier(selectedSymbols, covariance);
-      setFrontierData(frontierRes);
+      try {
+        sessionStorage.setItem('quant_opt_result', JSON.stringify(res));
+      } catch {}
+      if (frontierRes) {
+        setFrontierData(frontierRes);
+        try {
+          sessionStorage.setItem('quant_frontier_data', JSON.stringify(frontierRes));
+        } catch {}
+      }
     } catch (err) {
       setError(err.message || 'Optimization failed');
     } finally {
@@ -158,11 +218,8 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
       });
       setRebalanceMsg(`Rebalanced successfully! Executed ${res.orders_count} orders.`);
       if (onRebalanceDone) onRebalanceDone();
-      setTimeout(() => {
-        setActiveTab('dashboard');
-      }, 1500);
     } catch (err) {
-      setError(err.message || 'Rebalance failed');
+      setError(err.message || 'Rebalancing failed');
     } finally {
       setRebalancing(false);
     }
@@ -171,71 +228,93 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
   return (
     <div className="space-y-6">
       {/* Header & Mode Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-[#1A263D]">
-        <div className="flex items-center gap-2.5">
-          <h1 className="text-base font-semibold text-[#F8FAFC] tracking-tight">Optimizer Studio</h1>
-          <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#121B2F] text-[#94A3B8] border border-[#1A263D]">
-            {activeMode === 'math' ? 'CVXPY & SLSQP' : 'Alpha Models'}
-          </span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-fintech-border">
+        <div>
+          <h1 className="text-base font-bold text-fintech-textHeading tracking-tight">
+            Portfolio Optimization
+          </h1>
+          <p className="text-xs text-fintech-textMuted">
+            Quantitative allocation models, risk parity & multi-objective algorithms
+          </p>
         </div>
 
-        {/* Linear-style Segmented Pills */}
-        <div className="flex items-center bg-[#0D1322] p-1 rounded-lg border border-[#1A263D] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]">
+        {/* Mode Selector */}
+        <div className="flex items-center gap-1 bg-fintech-card p-1 rounded-xl border border-fintech-border shadow-sm">
           <button
             onClick={() => setActiveMode('math')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
               activeMode === 'math'
-                ? 'bg-[#1A263D] text-white shadow-sm ring-1 ring-white/10 border border-white/5'
-                : 'text-[#94A3B8] hover:text-white'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-fintech-textMuted hover:text-fintech-textHeading hover:bg-fintech-subtle'
             }`}
           >
             <Sliders className="w-3.5 h-3.5" />
-            <span>Mathematical Solvers</span>
+            <span>Quantitative Optimizers</span>
+          </button>
+          <button
+            onClick={() => setActiveMode('pareto')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeMode === 'pareto'
+                ? 'bg-purple-600 text-white shadow-sm'
+                : 'text-fintech-textMuted hover:text-fintech-textHeading hover:bg-fintech-subtle'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Pareto Frontier Explorer</span>
           </button>
           <button
             onClick={() => setActiveMode('strategy')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
               activeMode === 'strategy'
-                ? 'bg-[#1A263D] text-white shadow-sm ring-1 ring-white/10 border border-white/5'
-                : 'text-[#94A3B8] hover:text-white'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-fintech-textMuted hover:text-fintech-textHeading hover:bg-fintech-subtle'
             }`}
           >
             <Code className="w-3.5 h-3.5" />
-            <span>Quant Strategies</span>
+            <span>Python Strategy Studio</span>
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="p-3 rounded-lg bg-[#EF4444]/10 border border-[#EF4444]/30 text-[#EF4444] text-xs font-mono">
+        <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-mono">
           {error}
         </div>
       )}
 
       {rebalanceMsg && (
-        <div className="p-3 rounded-lg bg-[#10B981]/10 border border-[#10B981]/30 text-[#10B981] text-xs font-mono flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4" />
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-mono flex items-center justify-between">
           <span>{rebalanceMsg}</span>
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className="underline font-bold text-emerald-900"
+          >
+            View Paper Ledger →
+          </button>
         </div>
       )}
 
-      {/* Mode 1: Mathematical Convex Solvers */}
-      {activeMode === 'math' ? (
+      {/* Mode 1: Quantitative Optimizers */}
+      {activeMode === 'math' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Configuration Controls (4 cols) */}
-          <div className="lg:col-span-4 bg-[#0D1322] border border-[#1A263D] rounded-xl p-4 space-y-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_4px_20px_-2px_rgba(0,0,0,0.5)]">
-            {/* Presets */}
+          {/* Left Column: Controls (4 cols) */}
+          <div className="lg:col-span-4 bg-fintech-card border border-fintech-border rounded-xl p-5 shadow-fintech-card space-y-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-fintech-textHeading font-mono">
+              Optimizer Setup
+            </h3>
+
+            {/* Universe Presets */}
             <div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#94A3B8] block mb-1.5">
-                Universe Presets
-              </span>
-              <div className="grid grid-cols-2 gap-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-fintech-textMuted block mb-1.5">
+                Quick Basket Presets
+              </label>
+              <div className="flex flex-wrap gap-1.5">
                 {Object.keys(presets).map((key) => (
                   <button
                     key={key}
                     type="button"
                     onClick={() => handleSelectPreset(key)}
-                    className="px-2.5 py-1.5 rounded-lg bg-[#080D18] hover:bg-[#121B2F] text-[#94A3B8] hover:text-white border border-[#1A263D] text-[11px] font-mono transition-colors text-left truncate"
+                    className="px-2 py-1 rounded bg-fintech-subtle hover:bg-fintech-card border border-fintech-border text-[11px] font-mono text-fintech-textBody hover:text-blue-600 transition-colors"
                   >
                     {key.replace(/_/g, ' ')}
                   </button>
@@ -245,46 +324,53 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
 
             {/* Model Select */}
             <div>
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-[#94A3B8] block mb-1.5">
-                Optimization Model
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-fintech-textMuted block mb-1.5">
+                Optimization Algorithm
               </label>
               <select
                 value={optimizer}
                 onChange={(e) => setOptimizer(e.target.value)}
-                className="w-full bg-[#080D18] border border-[#1A263D] rounded-lg px-2.5 py-2 text-xs font-mono text-[#F8FAFC] focus:border-[#3B82F6] outline-none"
+                className="w-full bg-fintech-subtle border border-fintech-border rounded-lg px-3 py-2 text-xs font-mono text-fintech-textHeading focus:border-blue-600 outline-none"
               >
-                <option value="maximum_sharpe">Maximum Sharpe Ratio (Rf = 6.5%)</option>
+                <option value="rmt_momentum">RMT Trend Momentum (Default)</option>
+                <option value="maximum_sharpe">Maximum Sharpe Ratio (Tangency, Rf = 6.5%)</option>
                 <option value="minimum_variance">Minimum Variance (Quadratic QP)</option>
-                <option value="risk_parity">Risk Parity / ERC</option>
+                <option value="risk_parity">Risk Parity / Equal Risk Contribution (ERC)</option>
                 <option value="hierarchical_risk_parity">Hierarchical Risk Parity (HRP)</option>
                 <option value="black_litterman">Black-Litterman (Bayesian Views)</option>
-                <option value="cvar">CVaR 95% Expected Shortfall</option>
+                <option value="cvar">CVaR (95% Expected Shortfall)</option>
+                <option value="nsga2">NSGA-II (Multi-Objective: Return, CVaR, Turnover, Diversification)</option>
+                <option value="genetic_algorithm">Genetic Algorithm (Evolutionary Search)</option>
+                <option value="entropy_pooling">Entropy Pooling (Meucci View-Conditioned)</option>
+                <option value="moead">MOEA/D (Decomposition Tchebycheff Subproblems)</option>
+                <option value="spea2">SPEA2 (Strength Pareto Density Estimation)</option>
+                <option value="mopso">MOPSO (Multi-Objective Particle Swarm)</option>
               </select>
             </div>
 
             {/* Covariance Estimation */}
             <div>
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-[#94A3B8] block mb-1.5">
-                Covariance Matrix
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-fintech-textMuted block mb-1.5">
+                Covariance & Risk Estimator
               </label>
               <select
                 value={covariance}
                 onChange={(e) => setCovariance(e.target.value)}
-                className="w-full bg-[#080D18] border border-[#1A263D] rounded-lg px-2.5 py-2 text-xs font-mono text-[#F8FAFC] focus:border-[#3B82F6] outline-none"
+                className="w-full bg-fintech-subtle border border-fintech-border rounded-lg px-3 py-2 text-xs font-mono text-fintech-textHeading focus:border-blue-600 outline-none"
               >
                 <option value="ledoit_wolf">Ledoit-Wolf Analytic Shrinkage</option>
                 <option value="sample">Sample Covariance (Annualized)</option>
-                <option value="rmt">Random Matrix Theory (Cleaned)</option>
-                <option value="three_factor">3-Factor Structured</option>
+                <option value="rmt">Random Matrix Theory (Marchenko-Pastur RMT)</option>
+                <option value="three_factor">3-Factor Structured (Market, SMB, HML)</option>
               </select>
             </div>
 
             {/* Constraints Sliders */}
-            <div className="space-y-3 pt-2 border-t border-[#1A263D]">
+            <div className="space-y-3 pt-2 border-t border-fintech-border">
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="text-[#94A3B8]">Max Single Asset:</span>
-                  <span className="text-[#F8FAFC] font-semibold">{Math.round(maxAssetWeight * 100)}%</span>
+                  <span className="text-fintech-textMuted">Max Single Asset Weight:</span>
+                  <span className="text-fintech-textHeading font-bold">{Math.round(maxAssetWeight * 100)}%</span>
                 </div>
                 <input
                   type="range"
@@ -293,14 +379,14 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                   step="0.05"
                   value={maxAssetWeight}
                   onChange={(e) => setMaxAssetWeight(e.target.value)}
-                  className="w-full accent-[#3B82F6] cursor-pointer"
+                  className="w-full accent-blue-600 cursor-pointer"
                 />
               </div>
 
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="text-[#94A3B8]">Max Sector Cap:</span>
-                  <span className="text-[#F8FAFC] font-semibold">{Math.round(maxSectorWeight * 100)}%</span>
+                  <span className="text-fintech-textMuted">Max Sector Cap:</span>
+                  <span className="text-fintech-textHeading font-bold">{Math.round(maxSectorWeight * 100)}%</span>
                 </div>
                 <input
                   type="range"
@@ -309,14 +395,14 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                   step="0.05"
                   value={maxSectorWeight}
                   onChange={(e) => setMaxSectorWeight(e.target.value)}
-                  className="w-full accent-[#3B82F6] cursor-pointer"
+                  className="w-full accent-blue-600 cursor-pointer"
                 />
               </div>
 
               <div>
                 <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="text-[#94A3B8]">Cash Buffer:</span>
-                  <span className="text-[#F8FAFC] font-semibold">{Math.round(cashBuffer * 100)}%</span>
+                  <span className="text-fintech-textMuted">Cash Buffer:</span>
+                  <span className="text-fintech-textHeading font-bold">{Math.round(cashBuffer * 100)}%</span>
                 </div>
                 <input
                   type="range"
@@ -325,20 +411,20 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                   step="0.01"
                   value={cashBuffer}
                   onChange={(e) => setCashBuffer(e.target.value)}
-                  className="w-full accent-[#3B82F6] cursor-pointer"
+                  className="w-full accent-blue-600 cursor-pointer"
                 />
               </div>
             </div>
 
-            {/* Black-Litterman Active Views */}
+            {/* Black-Litterman Views */}
             {optimizer === 'black_litterman' && (
-              <div className="p-3 bg-[#080D18] rounded-lg border border-[#1A263D] space-y-2">
-                <span className="text-[10px] font-semibold text-[#F59E0B] uppercase block">Investor Views</span>
+              <div className="p-3 bg-fintech-subtle rounded-lg border border-fintech-border space-y-2">
+                <span className="text-[10px] font-bold text-amber-700 uppercase block">Investor Views</span>
                 <div className="flex gap-2">
                   <select
                     value={viewSymbol}
                     onChange={(e) => setViewSymbol(e.target.value)}
-                    className="bg-[#0D1322] border border-[#1A263D] rounded px-2 py-1 text-xs text-[#F8FAFC]"
+                    className="bg-fintech-card border border-fintech-border rounded px-2 py-1 text-xs text-fintech-textHeading font-mono"
                   >
                     {selectedSymbols.map((s) => (
                       <option key={s} value={s}>{s.replace('.NS', '')}</option>
@@ -349,45 +435,35 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                     step="0.01"
                     value={viewExpectedReturn}
                     onChange={(e) => setViewExpectedReturn(e.target.value)}
-                    placeholder="Return (e.g. 0.20)"
-                    className="w-20 bg-[#0D1322] border border-[#1A263D] rounded px-2 py-1 text-xs text-[#F8FAFC] font-mono"
+                    placeholder="Return"
+                    className="w-20 bg-fintech-card border border-fintech-border rounded px-2 py-1 text-xs text-fintech-textHeading font-mono"
                   />
                   <button
                     type="button"
                     onClick={handleAddView}
-                    className="px-2 py-1 bg-[#3B82F6] hover:bg-blue-600 rounded text-xs text-white font-semibold"
+                    className="px-2 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs text-white font-bold"
                   >
                     Add
                   </button>
                 </div>
-                {Object.keys(views).length > 0 && (
-                  <div className="space-y-1 mt-1">
-                    {Object.entries(views).map(([s, ret]) => (
-                      <div key={s} className="flex items-center justify-between text-[11px] font-mono text-[#94A3B8]">
-                        <span>{s.replace('.NS', '')}: +{(ret * 100).toFixed(1)}%</span>
-                        <button onClick={() => handleRemoveView(s)} className="text-[#F43F5E] hover:underline">Remove</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             )}
 
-            {/* Run Button with signature arrow gradient */}
+            {/* Run Button */}
             <button
               onClick={handleRunOptimization}
               disabled={loading}
-              className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#10B981] hover:from-[#2563EB] hover:to-[#059669] text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 hover:shadow-emerald-500/20 transition-all disabled:opacity-50"
+              className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50"
             >
               {loading ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Optimizing...</span>
+                  <span>Solving Optimizer...</span>
                 </>
               ) : (
                 <>
                   <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Run Optimization</span>
+                  <span>Execute {optimizer.replace(/_/g, ' ').toUpperCase()}</span>
                 </>
               )}
             </button>
@@ -396,14 +472,14 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
           {/* Right Column: Universe & Results (8 cols) */}
           <div className="lg:col-span-8 space-y-6">
             {/* Ticker Badges Selector */}
-            <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_4px_20px_-2px_rgba(0,0,0,0.5)]">
+            <div className="bg-fintech-card border border-fintech-border rounded-xl p-4 shadow-fintech-card">
               <div className="flex items-center justify-between mb-2.5">
-                <span className="text-xs font-semibold uppercase tracking-wider text-[#94A3B8]">
-                  Universe ({selectedSymbols.length} Selected)
+                <span className="text-xs font-bold uppercase tracking-wider text-fintech-textHeading font-mono">
+                  Asset Universe ({selectedSymbols.length} Selected)
                 </span>
                 <button
                   onClick={() => setSelectedSymbols(instruments.map((i) => i.symbol))}
-                  className="text-[11px] text-[#3B82F6] hover:underline font-mono"
+                  className="text-[11px] text-blue-600 hover:underline font-mono font-medium"
                 >
                   Select All
                 </button>
@@ -416,10 +492,10 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                     <button
                       key={inst.symbol}
                       onClick={() => toggleSymbol(inst.symbol)}
-                      className={`px-2 py-0.5 rounded text-xs font-mono transition-colors border ${
+                      className={`px-2 py-1 rounded text-xs font-mono font-semibold transition-colors border ${
                         isSelected
-                          ? 'bg-[#1A263D] text-white border-[#3B82F6] shadow-sm shadow-blue-500/20'
-                          : 'bg-[#080D18] text-[#94A3B8] border-[#1A263D] hover:text-white hover:bg-[#121B2F]'
+                          ? 'bg-blue-50 text-blue-700 border-blue-300 shadow-sm'
+                          : 'bg-fintech-subtle text-fintech-textMuted border-fintech-border hover:bg-fintech-card hover:text-fintech-textHeading'
                       }`}
                     >
                       {inst.symbol.replace('.NS', '')}
@@ -434,25 +510,44 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
               <div className="space-y-6">
                 {/* 3 Metric Cards */}
                 <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-3 text-center shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <span className="text-[10px] text-[#94A3B8] uppercase block mb-0.5">Exp Return</span>
-                    <span className="text-lg font-bold font-mono text-[#10B981] tabular-nums">
+                  <div className="bg-fintech-card border border-fintech-border rounded-xl p-3.5 text-center shadow-fintech-card">
+                    <span className="text-[10px] text-fintech-textMuted uppercase font-semibold block mb-0.5">Expected Annual Return</span>
+                    <span className="text-xl font-bold font-mono text-emerald-700 tabular-nums">
                       +{(optResult.expected_annual_return * 100).toFixed(2)}%
                     </span>
                   </div>
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-3 text-center shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <span className="text-[10px] text-[#94A3B8] uppercase block mb-0.5">Annual Vol</span>
-                    <span className="text-lg font-bold font-mono text-[#F8FAFC] tabular-nums">
+                  <div className="bg-fintech-card border border-fintech-border rounded-xl p-3.5 text-center shadow-fintech-card">
+                    <span className="text-[10px] text-fintech-textMuted uppercase font-semibold block mb-0.5">Annual Volatility</span>
+                    <span className="text-xl font-bold font-mono text-fintech-textHeading tabular-nums">
                       {(optResult.annual_volatility * 100).toFixed(2)}%
                     </span>
                   </div>
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-3 text-center shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <span className="text-[10px] text-[#94A3B8] uppercase block mb-0.5">Sharpe</span>
-                    <span className="text-lg font-bold font-mono text-[#3B82F6] tabular-nums">
+                  <div className="bg-fintech-card border border-fintech-border rounded-xl p-3.5 text-center shadow-fintech-card">
+                    <span className="text-[10px] text-fintech-textMuted uppercase font-semibold block mb-0.5">Sharpe Ratio</span>
+                    <span className="text-xl font-bold font-mono text-blue-700 tabular-nums">
                       {optResult.sharpe_ratio}
                     </span>
                   </div>
                 </div>
+
+                {/* Research Algorithm Meta Badge (If evolutionary / multi-objective) */}
+                {optResult.meta && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between text-xs font-mono text-purple-900">
+                    <div className="flex items-center gap-2">
+                      <Cpu className="w-4 h-4 text-purple-700" />
+                      <span className="font-bold">{optResult.meta.algorithm} Diagnostics:</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-[11px]">
+                      {Object.entries(optResult.meta)
+                        .filter(([k]) => k !== 'algorithm' && typeof optResult.meta[k] !== 'object')
+                        .map(([k, v]) => (
+                          <span key={k}>
+                            {k.replace(/_/g, ' ')}: <strong className="text-purple-950">{String(v)}</strong>
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Efficient Frontier Chart */}
                 <EfficientFrontierChart frontierData={frontierData} />
@@ -465,27 +560,29 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                   />
 
                   {/* Weights Table */}
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-4 overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[#94A3B8] mb-2.5">Target Weights</h3>
+                  <div className="bg-fintech-card border border-fintech-border rounded-xl p-4 overflow-hidden shadow-fintech-card">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-fintech-textHeading mb-2.5 font-mono">
+                      Target Optimized Weights
+                    </h3>
                     <div className="max-h-60 overflow-y-auto">
                       <table className="w-full text-left text-xs font-mono">
-                        <thead className="bg-[#080D18] text-[#94A3B8] uppercase sticky top-0 text-[10px]">
+                        <thead className="bg-fintech-subtle text-fintech-textMuted uppercase sticky top-0 text-[10px]">
                           <tr>
                             <th className="py-2 px-3">Asset</th>
                             <th className="py-2 px-3 text-right">Weight</th>
                             <th className="py-2 px-3 text-right">Risk %</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-[#1A263D]/60">
+                        <tbody className="divide-y divide-fintech-border">
                           {Object.entries(optResult.constrained_weights).map(([sym, w]) => {
                             const rc = optResult.risk_contributions ? optResult.risk_contributions[sym] : 0.0;
                             return (
-                              <tr key={sym} className="hover:bg-[#121B2F]/50">
-                                <td className="py-1.5 px-3 font-semibold text-[#F8FAFC]">{sym.replace('.NS', '')}</td>
-                                <td className="py-1.5 px-3 text-right tabular-nums text-[#F8FAFC]">
+                              <tr key={sym} className="hover:bg-fintech-cardHover">
+                                <td className="py-1.5 px-3 font-bold text-fintech-textHeading">{sym.replace('.NS', '')}</td>
+                                <td className="py-1.5 px-3 text-right tabular-nums text-fintech-textHeading font-semibold">
                                   {(w * 100).toFixed(1)}%
                                 </td>
-                                <td className="py-1.5 px-3 text-right tabular-nums text-[#3B82F6]">
+                                <td className="py-1.5 px-3 text-right tabular-nums text-blue-700 font-semibold">
                                   {rc ? `${(rc * 100).toFixed(1)}%` : '-'}
                                 </td>
                               </tr>
@@ -497,16 +594,18 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                   </div>
                 </div>
 
-                {/* Rebalance Action Banner */}
-                <div className="bg-[#0D1322] border border-[#10B981]/30 rounded-xl p-4 flex items-center justify-between gap-4 shadow-[inset_0_1px_0_0_rgba(16,185,129,0.1),0_4px_20px_rgba(0,0,0,0.4)]">
+                {/* Deploy Button */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center justify-between gap-4">
                   <div>
-                    <h4 className="font-semibold text-[#F8FAFC] text-xs">Deploy Target Allocation to Paper Ledger</h4>
-                    <p className="text-[11px] text-[#64748B]">Executes simulated market orders with Indian statutory fees & slippage.</p>
+                    <h4 className="font-bold text-emerald-950 text-xs">Deploy Allocation to Live Paper Ledger</h4>
+                    <p className="text-[11px] text-emerald-800">
+                      Executes portfolio rebalance with statutory brokerage, STT and market impact slippage.
+                    </p>
                   </div>
                   <button
                     onClick={() => handleDeployToPortfolio(optResult.constrained_weights, optResult.optimizer, optResult.covariance)}
                     disabled={rebalancing}
-                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition-all disabled:opacity-50 flex-shrink-0"
+                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
                   >
                     {rebalancing ? (
                       <>
@@ -516,223 +615,34 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                     ) : (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Rebalance Portfolio</span>
+                        <span>Deploy Target Weights</span>
                       </>
                     )}
                   </button>
                 </div>
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        /* Mode 2: Custom Quantitative Strategies */
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Strategy Picker (4 cols) */}
-          <div className="lg:col-span-4 space-y-4">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-[#94A3B8] block">
-              Registered Strategies
-            </span>
-            <div className="space-y-2">
-              {availableStrategies.map((strat) => {
-                const isSelected = strat.id === selectedStrategyId;
-                return (
-                  <div
-                    key={strat.id}
-                    onClick={() => setSelectedStrategyId(strat.id)}
-                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                      isSelected
-                        ? 'bg-[#1A263D] border-[#3B82F6] shadow-sm shadow-blue-500/10'
-                        : 'bg-[#0D1322] border-[#1A263D] hover:border-[#2A3B5C]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-semibold text-xs text-[#F8FAFC]">{strat.name}</span>
-                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#080D18] text-[#94A3B8] border border-[#1A263D]">
-                        {strat.category}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[#94A3B8] line-clamp-2 leading-relaxed">
-                      {strat.description}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Cash Buffer & Execute */}
-            <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-4 space-y-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_4px_20px_-2px_rgba(0,0,0,0.5)]">
-              <div className="flex justify-between text-xs font-mono">
-                <span className="text-[#94A3B8]">Cash Buffer:</span>
-                <span className="text-[#F8FAFC] font-semibold">{Math.round(cashBuffer * 100)}%</span>
-              </div>
-              <input
-                type="range"
-                min="0.00"
-                max="0.10"
-                step="0.01"
-                value={cashBuffer}
-                onChange={(e) => setCashBuffer(e.target.value)}
-                className="w-full accent-[#3B82F6] cursor-pointer"
-              />
-
-              <button
-                onClick={handleRunStrategy}
-                disabled={loading}
-                className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#10B981] hover:from-[#2563EB] hover:to-[#059669] text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 hover:shadow-emerald-500/20 transition-all disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Evaluating Alpha Signals...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                    <span>Run Strategy Signals</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* Right Column: Universe & Output (8 cols) */}
-          <div className="lg:col-span-8 space-y-6">
-            {/* Universe Selector */}
-            <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_4px_20px_-2px_rgba(0,0,0,0.5)]">
-              <div className="flex items-center justify-between mb-2.5">
-                <span className="text-xs font-semibold uppercase tracking-wider text-[#94A3B8]">
-                  Universe ({selectedSymbols.length} Tickers)
-                </span>
-                <div className="flex gap-1.5">
-                  {Object.keys(presets).slice(0, 2).map((key) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => handleSelectPreset(key)}
-                      className="px-2 py-0.5 rounded bg-[#080D18] text-[#94A3B8] hover:text-white border border-[#1A263D] text-[10px] font-mono"
-                    >
-                      {key.replace(/_/g, ' ')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-1">
-                {instruments.map((inst) => {
-                  const isSelected = selectedSymbols.includes(inst.symbol);
-                  return (
-                    <button
-                      key={inst.symbol}
-                      onClick={() => toggleSymbol(inst.symbol)}
-                      className={`px-2 py-0.5 rounded text-xs font-mono transition-colors border ${
-                        isSelected
-                          ? 'bg-[#1A263D] text-white border-[#3B82F6] shadow-sm shadow-blue-500/20'
-                          : 'bg-[#080D18] text-[#94A3B8] border-[#1A263D] hover:text-white hover:bg-[#121B2F]'
-                      }`}
-                    >
-                      {inst.symbol.replace('.NS', '')}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Strategy Output */}
-            {strategyResult ? (
-              <div className="space-y-6">
-                {/* 3 Metric Cards */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-3 text-center shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <span className="text-[10px] text-[#94A3B8] uppercase block mb-0.5">Exp Return</span>
-                    <span className="text-lg font-bold font-mono text-[#10B981] tabular-nums">
-                      +{strategyResult.expected_return}%
-                    </span>
-                  </div>
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-3 text-center shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <span className="text-[10px] text-[#94A3B8] uppercase block mb-0.5">Volatility</span>
-                    <span className="text-lg font-bold font-mono text-[#F8FAFC] tabular-nums">
-                      {strategyResult.volatility}%
-                    </span>
-                  </div>
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-3 text-center shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <span className="text-[10px] text-[#94A3B8] uppercase block mb-0.5">Sharpe</span>
-                    <span className="text-lg font-bold font-mono text-[#3B82F6] tabular-nums">
-                      {strategyResult.sharpe}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Donut & Weights Table */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <AllocationDonut weights={strategyResult.weights} />
-
-                  <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-4 overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[#94A3B8] mb-2.5">
-                      Strategy Allocation
-                    </h3>
-                    <div className="max-h-60 overflow-y-auto">
-                      <table className="w-full text-left text-xs font-mono">
-                        <thead className="bg-[#080D18] text-[#94A3B8] uppercase sticky top-0 text-[10px]">
-                          <tr>
-                            <th className="py-2 px-3">Asset</th>
-                            <th className="py-2 px-3 text-right">Target Weight</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#1A263D]/60">
-                          {Object.entries(strategyResult.weights).map(([sym, w]) => (
-                            <tr key={sym} className="hover:bg-[#121B2F]/50">
-                              <td className="py-1.5 px-3 font-semibold text-[#F8FAFC]">{sym.replace('.NS', '')}</td>
-                              <td className="py-1.5 px-3 text-right tabular-nums text-[#F8FAFC]">
-                                {(w * 100).toFixed(1)}%
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Rebalance Action */}
-                <div className="bg-[#0D1322] border border-[#10B981]/30 rounded-xl p-4 flex items-center justify-between gap-4 shadow-[inset_0_1px_0_0_rgba(16,185,129,0.1),0_4px_20px_rgba(0,0,0,0.4)]">
-                  <div>
-                    <h4 className="font-semibold text-[#F8FAFC] text-xs">Deploy Strategy to Paper Ledger</h4>
-                    <p className="text-[11px] text-[#64748B]">Executes rebalance per {strategyResult.strategy_name} targets.</p>
-                  </div>
-                  <button
-                    onClick={() => handleDeployToPortfolio(strategyResult.weights, strategyResult.strategy_name, 'Strategy Signal')}
-                    disabled={rebalancing}
-                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#10B981] to-[#059669] hover:from-[#059669] hover:to-[#047857] text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition-all disabled:opacity-50 flex-shrink-0"
-                  >
-                    {rebalancing ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Rebalancing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Rebalance Portfolio</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-8 text-center text-[#64748B] space-y-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]">
-                <Terminal className="w-8 h-8 text-[#3B82F6] mx-auto opacity-60" />
-                <h4 className="text-xs font-medium text-[#F8FAFC]">Select a Strategy and Click "Run Strategy Signals"</h4>
-                <p className="text-[11px] max-w-sm mx-auto">
-                  Evaluates historical indicators and returns risk-budgeted weights for execution.
-                </p>
               </div>
             )}
           </div>
         </div>
       )}
+
+      {/* Mode 2: Pareto Frontier Explorer */}
+      {activeMode === 'pareto' && (
+        <ParetoFrontierExplorer
+          selectedSymbols={selectedSymbols}
+          covariance={covariance}
+        />
+      )}
+
+      {/* Mode 3: Custom Python Strategy Studio */}
+      {activeMode === 'strategy' && (
+        <PythonStrategyStudio
+          selectedSymbols={selectedSymbols}
+          cashBuffer={cashBuffer}
+          onRebalanceDone={onRebalanceDone}
+          setActiveTab={setActiveTab}
+        />
+      )}
     </div>
   );
 }
-
-

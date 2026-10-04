@@ -5,9 +5,9 @@ export default function AllocationDonut({ weights = {}, sectorAllocations = {} }
   const [viewMode, setViewMode] = useState('assets'); // 'assets' | 'sectors'
 
   const COLORS = [
-    '#3B82F6', '#10B981', '#06B6D4', '#8B5CF6', '#F59E0B',
-    '#38BDF8', '#34D399', '#6366F1', '#EC4899', '#F97316',
-    '#94A3B8', '#EAB308'
+    '#2563EB', '#059669', '#D97706', '#7C3AED', '#0891B2',
+    '#DC2626', '#4F46E5', '#16A34A', '#CA8A04', '#9333EA',
+    '#64748B', '#0284C7'
   ];
 
   const assetData = Object.entries(weights)
@@ -32,9 +32,9 @@ export default function AllocationDonut({ weights = {}, sectorAllocations = {} }
     if (active && payload && payload.length) {
       const data = payload[0];
       return (
-        <div className="bg-[#080D18] border border-[#1A263D] p-2.5 rounded-lg shadow-xl text-xs font-mono">
-          <div className="text-[#F8FAFC] font-bold">{data.name}</div>
-          <div className="text-[#3B82F6] font-medium">{data.value}% allocation</div>
+        <div className="bg-fintech-card border border-fintech-border p-2.5 rounded-lg shadow-xl text-xs font-mono">
+          <div className="text-fintech-textHeading font-bold">{data.name}</div>
+          <div className="text-blue-600 font-semibold">{data.value}% allocation</div>
         </div>
       );
     }
@@ -42,25 +42,25 @@ export default function AllocationDonut({ weights = {}, sectorAllocations = {} }
   };
 
   return (
-    <div className="bg-[#0D1322] border border-[#1A263D] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_4px_20px_-2px_rgba(0,0,0,0.5)]">
+    <div className="bg-fintech-card border border-fintech-border rounded-xl p-5 shadow-fintech-card">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-[#94A3B8]">Target Allocation</h3>
-          <p className="text-[11px] text-[#64748B]">Active weights distribution</p>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-fintech-textHeading">Target Allocation</h3>
+          <p className="text-[11px] text-fintech-textMuted">Active asset and sector weights</p>
         </div>
-        <div className="flex items-center gap-1 bg-[#080D18] p-1 rounded-lg border border-[#1A263D]">
+        <div className="flex items-center gap-1 bg-fintech-subtle p-1 rounded-lg border border-fintech-border">
           <button
             onClick={() => setViewMode('assets')}
-            className={`px-2.5 py-1 text-xs font-medium rounded transition-all ${
-              viewMode === 'assets' ? 'bg-[#1A263D] text-white shadow-sm ring-1 ring-white/10' : 'text-[#94A3B8] hover:text-white'
+            className={`px-2.5 py-1 text-xs font-semibold rounded transition-all ${
+              viewMode === 'assets' ? 'bg-fintech-card text-blue-600 shadow-sm border border-fintech-border' : 'text-fintech-textMuted hover:text-fintech-textHeading'
             }`}
           >
             Assets
           </button>
           <button
             onClick={() => setViewMode('sectors')}
-            className={`px-2.5 py-1 text-xs font-medium rounded transition-all ${
-              viewMode === 'sectors' ? 'bg-[#1A263D] text-white shadow-sm ring-1 ring-white/10' : 'text-[#94A3B8] hover:text-white'
+            className={`px-2.5 py-1 text-xs font-semibold rounded transition-all ${
+              viewMode === 'sectors' ? 'bg-fintech-card text-blue-600 shadow-sm border border-fintech-border' : 'text-fintech-textMuted hover:text-fintech-textHeading'
             }`}
           >
             Sectors
@@ -69,7 +69,7 @@ export default function AllocationDonut({ weights = {}, sectorAllocations = {} }
       </div>
 
       {displayData.length === 0 ? (
-        <div className="h-64 flex items-center justify-center text-[#64748B] text-xs font-mono">
+        <div className="h-64 flex items-center justify-center text-fintech-textMuted text-xs font-mono">
           No active allocations to display.
         </div>
       ) : (
@@ -102,13 +102,13 @@ export default function AllocationDonut({ weights = {}, sectorAllocations = {} }
               <div key={item.name} className="flex items-center justify-between text-xs font-mono">
                 <div className="flex items-center gap-2 truncate pr-2">
                   <span
-                    className="w-2 h-2 rounded-full flex-shrink-0 shadow-sm"
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0 shadow-sm"
                     style={{ backgroundColor: COLORS[index % COLORS.length] }}
                   />
-                  <span className="text-[#E2E8F0] truncate">{item.name}</span>
+                  <span className="text-fintech-textBody truncate font-medium">{item.name}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-16 h-1.5 bg-[#080D18] rounded-full overflow-hidden border border-[#1A263D]/60">
+                  <div className="w-16 h-1.5 bg-fintech-subtle rounded-full overflow-hidden border border-fintech-border">
                     <div
                       className="h-full rounded-full"
                       style={{
@@ -117,7 +117,7 @@ export default function AllocationDonut({ weights = {}, sectorAllocations = {} }
                       }}
                     />
                   </div>
-                  <span className="text-[#F8FAFC] font-semibold w-12 text-right tabular-nums">{item.value}%</span>
+                  <span className="text-fintech-textHeading font-semibold w-12 text-right tabular-nums">{item.value}%</span>
                 </div>
               </div>
             ))}

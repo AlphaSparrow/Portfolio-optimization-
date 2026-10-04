@@ -51,14 +51,22 @@ class PerformanceAttribution:
             port_sector_weighted_ret[sec] += w_p * r_p
             bm_sector_weighted_ret[sec] += w_b * r_b
 
-        # Compute sector return R_s
-        port_sector_ret = {}
+        # Compute benchmark sector return R_s first
         bm_sector_ret = {}
+        for sec in sectors:
+            w_b = bm_sector_weights[sec]
+            bm_sector_ret[sec] = (bm_sector_weighted_ret[sec] / w_b) if w_b > 1e-4 else 0.0
+
+        port_sector_ret = {}
         for sec in sectors:
             w_p = port_sector_weights[sec]
             w_b = bm_sector_weights[sec]
-            port_sector_ret[sec] = (port_sector_weighted_ret[sec] / w_p) if w_p > 1e-4 else 0.0
-            bm_sector_ret[sec] = (bm_sector_weighted_ret[sec] / w_b) if w_b > 1e-4 else 0.0
+            if w_p > 1e-4:
+                port_sector_ret[sec] = port_sector_weighted_ret[sec] / w_p
+            else:
+                port_sector_ret[sec] = bm_sector_ret[sec]
+            if w_b <= 1e-4 and w_p > 1e-4:
+                bm_sector_ret[sec] = port_sector_ret[sec]
 
         total_bm_return = sum(bm_sector_weighted_ret.values())
         total_port_return = sum(port_sector_weighted_ret.values())
@@ -90,19 +98,19 @@ class PerformanceAttribution:
                 "bm_weight_pct": round(w_b * 100, 2),
                 "port_return_pct": round(r_p * 100, 2),
                 "bm_return_pct": round(r_b * 100, 2),
-                "allocation_pct": round(alloc * 100, 3),
-                "selection_pct": round(select * 100, 3),
-                "interaction_pct": round(inter * 100, 3),
-                "total_contribution_pct": round(net_contrib * 100, 3)
+                "allocation_pct": round(alloc * 100, 2),
+                "selection_pct": round(select * 100, 2),
+                "interaction_pct": round(inter * 100, 2),
+                "total_contribution_pct": round(net_contrib * 100, 2)
             })
 
         return {
             "total_portfolio_return_pct": round(total_port_return * 100, 2),
             "total_benchmark_return_pct": round(total_bm_return * 100, 2),
             "total_active_return_pct": round(total_active_return * 100, 2),
-            "allocation_effect_pct": round(tot_alloc * 100, 3),
-            "selection_effect_pct": round(tot_select * 100, 3),
-            "interaction_effect_pct": round(tot_inter * 100, 3),
+            "allocation_effect_pct": round(tot_alloc * 100, 2),
+            "selection_effect_pct": round(tot_select * 100, 2),
+            "interaction_effect_pct": round(tot_inter * 100, 2),
             "sector_breakdown": sector_breakdown
         }
 

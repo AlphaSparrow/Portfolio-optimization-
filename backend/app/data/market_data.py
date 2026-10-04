@@ -19,7 +19,8 @@ from backend.app.data.instruments import get_instrument
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path("./.cache/market_data")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+CACHE_DIR = PROJECT_ROOT / ".cache" / "market_data"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 class MarketDataProvider:
@@ -41,18 +42,21 @@ class MarketDataProvider:
         if end_date is None:
             end_date = datetime.date.today().strftime("%Y-%m-%d")
 
-        cache_key = f"prices_{'_'.join(sorted(symbols[:5]))}_{len(symbols)}_{start_date}_{end_date}.parquet"
-        cache_path = CACHE_DIR / cache_key
-
-        if use_cache and cache_path.exists():
-            try:
-                df = pd.read_parquet(cache_path)
-                # Check if all requested symbols are present
-                missing = [s for s in symbols if s not in df.columns]
-                if not missing:
-                    return df[symbols].dropna()
-            except Exception as e:
-                logger.warning(f"Failed to read parquet cache: {e}")
+        cache_key = f"prices_{'_'.join(sorted(symbols)[:5])}_{len(symbols)}_{start_date}_{end_date}.pkl"
+        candidate_files = ["nifty50_2019_2023.pkl", "nifty50_recent.pkl"] if start_date < "2024-01-01" else ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]
+        for master_file in candidate_files:
+            master_path = CACHE_DIR / master_file
+            if master_path.exists():
+                try:
+                    m_df = pd.read_pickle(master_path)
+                    m_df.index = pd.to_datetime(m_df.index).date
+                    avail = [s for s in symbols if s in m_df.columns]
+                    if len(avail) == len(symbols) or (len(symbols) >= 10 and len(avail) >= int(len(symbols) * 0.8)):
+                        res_df = m_df[avail].dropna()
+                        if len(res_df) >= 30:
+                            return res_df
+                except Exception as e:
+                    logger.debug(f"Could not load from {master_file}: {e}")
 
         # Attempt 1: Upstox API if token is provided
         df = None
@@ -63,17 +67,33 @@ class MarketDataProvider:
         if df is None or df.empty:
             df = self._fetch_yfinance_historical(symbols, start_date, end_date)
 
-        # Attempt 3: Synthetic fallback if both external providers fail
+        # If still empty, try partial slice from master cache
         if df is None or df.empty:
-            logger.warning("External market data failed. Generating realistic synthetic data.")
-            df = self._generate_synthetic_prices(symbols, start_date, end_date)
+            for master_file in ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]:
+                master_path = CACHE_DIR / master_file
+                if master_path.exists():
+                    try:
+                        m_df = pd.read_pickle(master_path)
+                        m_df.index = pd.to_datetime(m_df.index).date
+                        avail = [s for s in symbols if s in m_df.columns]
+                        if len(avail) >= max(1, int(len(symbols) * 0.7)):
+                            df = m_df[avail].dropna()
+                            break
+                    except Exception:
+                        pass
+
+        if df is None or df.empty:
+            raise ValueError(
+                f"Real market data could not be retrieved for {symbols}. "
+                "Synthetic data generation is permanently disabled. Please check broker or internet connection."
+            )
 
         # Clean corporate actions, fill missing days, forward fill
         df = df.ffill().bfill().dropna()
 
-        # Save to parquet cache
+        # Save to pickle cache
         try:
-            df.to_parquet(cache_path)
+            df.to_pickle(cache_path)
         except Exception as e:
             logger.debug(f"Could not write cache file: {e}")
 
@@ -116,17 +136,28 @@ class MarketDataProvider:
     def _fetch_yfinance_historical(
         self, symbols: List[str], start_date: str, end_date: str
     ) -> Optional[pd.DataFrame]:
-        """Fetch historical adjusted close prices via yfinance"""
-        try:
+        """Fetch historical adjusted close prices via yfinance with timeout guard"""
+        import concurrent.futures
+
+        def _do_download():
             import yfinance as yf
-            # Download with auto_adjust
+            real_end = min(end_date, "2025-12-31")
             data = yf.download(
                 tickers=symbols,
                 start=start_date,
-                end=end_date,
+                end=real_end,
                 auto_adjust=True,
-                progress=False
+                progress=False,
+                threads=False,
+                timeout=3
             )
+            return data
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_do_download)
+                data = future.result(timeout=4.0)
+
             if data is not None and not data.empty:
                 if "Close" in data:
                     close_df = data["Close"]
@@ -137,64 +168,13 @@ class MarketDataProvider:
                     close_df = close_df.to_frame(name=symbols[0])
 
                 close_df.index = pd.to_datetime(close_df.index).date
-                # Filter to only requested symbols that are present
-                cols = [c for c in symbols if c in close_df.columns]
-                if cols:
-                    return close_df[cols].ffill().dropna()
+                valid_cols = [c for c in symbols if c in close_df.columns and close_df[c].notna().sum() > 10]
+                if valid_cols:
+                    res_df = close_df[valid_cols].ffill().bfill().dropna()
+                    return res_df
         except Exception as e:
-            logger.warning(f"yfinance fetch error: {e}")
+            logger.warning(f"yfinance fetch error or timeout: {e}")
         return None
-
-    def _generate_synthetic_prices(
-        self, symbols: List[str], start_date: str, end_date: str
-    ) -> pd.DataFrame:
-        """
-        Generate realistic synthetic Indian stock prices using Geometric Brownian Motion
-        with correlated shocks based on a factor covariance matrix.
-        """
-        dates = pd.date_range(start=start_date, end=end_date, freq="B").date
-        num_days = len(dates)
-        num_assets = len(symbols)
-
-        np.random.seed(42)
-
-        # Baseline parameters: Annualized drift ~12%, volatility 20-35%
-        annual_drift = 0.12
-        daily_drift = annual_drift / 252.0
-        vols = np.random.uniform(0.18, 0.32, size=num_assets)
-        daily_vols = vols / np.sqrt(252.0)
-
-        # Generate positive definite correlation matrix
-        raw_corr = np.random.uniform(0.2, 0.6, size=(num_assets, num_assets))
-        corr = (raw_corr + raw_corr.T) / 2.0
-        np.fill_diagonal(corr, 1.0)
-        # Ensure positive semi-definite
-        eigenvalues, eigenvectors = np.linalg.eigh(corr)
-        eigenvalues = np.maximum(eigenvalues, 1e-4)
-        corr = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-        inv_std = 1.0 / np.sqrt(np.diag(corr))
-        corr = inv_std[:, None] * corr * inv_std[None, :]
-
-        # Cholesky decomposition
-        L = np.linalg.cholesky(corr)
-
-        # Uncorrelated standard normal shocks
-        uncorr_shocks = np.random.normal(0, 1, size=(num_days, num_assets))
-        corr_shocks = uncorr_shocks @ L.T
-
-        # Calculate daily log returns
-        log_returns = (daily_drift - 0.5 * (daily_vols ** 2)) + daily_vols * corr_shocks
-
-        # Initial prices around ₹1,000 - ₹3,500
-        initial_prices = np.random.uniform(800.0, 3200.0, size=num_assets)
-        prices = np.zeros((num_days, num_assets))
-        prices[0] = initial_prices
-
-        for t in range(1, num_days):
-            prices[t] = prices[t - 1] * np.exp(log_returns[t])
-
-        df = pd.DataFrame(prices, index=dates, columns=symbols)
-        return df
 
     def get_live_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, float]]:
         """
