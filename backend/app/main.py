@@ -55,8 +55,22 @@ def health_check():
         "upstox_configured": bool(settings.UPSTOX_API_KEY)
     }
 
-frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
-if frontend_dist.exists() and (frontend_dist / "index.html").exists():
+candidate_dirs = [
+    Path(__file__).resolve().parent.parent / "static",
+    Path(__file__).resolve().parents[2] / "frontend" / "dist",
+    Path.cwd() / "backend" / "static",
+    Path.cwd() / "frontend" / "dist",
+    Path("/opt/render/project/src/backend/static"),
+    Path("/opt/render/project/src/frontend/dist"),
+]
+frontend_dist = None
+for d in candidate_dirs:
+    if d.exists() and (d / "index.html").exists():
+        frontend_dist = d
+        break
+
+if frontend_dist:
+    logger.info(f"Serving React frontend from: {frontend_dist}")
     assets_dir = frontend_dist / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
@@ -74,6 +88,7 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
             return FileResponse(str(target_file))
         return FileResponse(str(frontend_dist / "index.html"))
 else:
+    logger.warning("No built frontend found; falling back to JSON API mode.")
     @app.get("/")
     def root():
         return {
