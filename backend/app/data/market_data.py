@@ -169,7 +169,9 @@ class MarketDataProvider:
 
         def _do_download():
             import yfinance as yf
-            real_end = min(end_date, "2025-12-31")
+            real_end = end_date
+            if start_date > real_end:
+                real_end = (pd.to_datetime(start_date) + pd.Timedelta(days=5)).strftime("%Y-%m-%d")
             data = yf.download(
                 tickers=symbols,
                 start=start_date,

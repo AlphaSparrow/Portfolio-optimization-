@@ -13,6 +13,7 @@ import { TrendingUp, ShieldCheck, Award, CheckSquare, Square } from 'lucide-reac
 
 export default function BenchmarkComparison({ benchmarkData }) {
   const [timeRange, setTimeRange] = useState('1Y');
+  const [viewMode, setViewMode] = useState('rebased'); // 'rebased' (start from base ₹10L) or 'cumulative' (absolute ₹)
   const [activeSeries, setActiveSeries] = useState({
     portfolio: true,
     nifty_500: true,
@@ -27,25 +28,52 @@ export default function BenchmarkComparison({ benchmarkData }) {
 
   const { chart_data, metrics_table, excess_over_nifty500, excess_over_fd } = benchmarkData;
 
-  // Filter time range
-  let filteredData = chart_data;
+  // Slice time range
+  let rawSliced = chart_data;
   if (timeRange === '1M') {
-    filteredData = chart_data.slice(-21);
+    rawSliced = chart_data.slice(-21);
   } else if (timeRange === '3M') {
-    filteredData = chart_data.slice(-63);
+    rawSliced = chart_data.slice(-63);
   } else if (timeRange === '6M') {
-    filteredData = chart_data.slice(-126);
+    rawSliced = chart_data.slice(-126);
   } else if (timeRange === 'YTD') {
-    filteredData = chart_data.slice(-150);
+    const ytdStart = chart_data.findIndex(d => d.date && d.date.startsWith('2026'));
+    rawSliced = ytdStart >= 0 ? chart_data.slice(ytdStart) : chart_data.slice(-150);
   } else if (timeRange === '1Y') {
-    filteredData = chart_data.slice(-252);
+    rawSliced = chart_data.slice(-252);
   } else if (timeRange === '3Y') {
-    filteredData = chart_data.slice(-756);
+    rawSliced = chart_data.slice(-756);
   } else if (timeRange === '5Y') {
-    filteredData = chart_data.slice(-1260);
+    rawSliced = chart_data.slice(-1260);
   } else if (timeRange === 'ALL') {
-    filteredData = chart_data;
+    rawSliced = chart_data;
   }
+
+  const basePoint = rawSliced[0] || {};
+  const baseCap = 1000000.0;
+  const isRebased = viewMode === 'rebased';
+
+  const filteredData = rawSliced.map((d) => {
+    const p0 = basePoint.portfolio || 1;
+    const n500_0 = basePoint.nifty_500 || 1;
+    const n150_0 = basePoint.nifty_150 || 1;
+    const mf_0 = basePoint.mutual_fund || 1;
+    const fd_0 = basePoint.fd || 1;
+
+    return {
+      date: d.date,
+      portfolio: isRebased ? Math.round((d.portfolio / p0) * baseCap) : d.portfolio,
+      nifty_500: isRebased ? Math.round((d.nifty_500 / n500_0) * baseCap) : d.nifty_500,
+      nifty_150: isRebased ? Math.round((d.nifty_150 / n150_0) * baseCap) : d.nifty_150,
+      mutual_fund: isRebased ? Math.round((d.mutual_fund / mf_0) * baseCap) : d.mutual_fund,
+      fd: isRebased ? Math.round((d.fd / fd_0) * baseCap) : d.fd,
+      portfolio_ret: (((d.portfolio / p0) - 1) * 100).toFixed(2),
+      nifty_500_ret: (((d.nifty_500 / n500_0) - 1) * 100).toFixed(2),
+      nifty_150_ret: (((d.nifty_150 / n150_0) - 1) * 100).toFixed(2),
+      mutual_fund_ret: (((d.mutual_fund / mf_0) - 1) * 100).toFixed(2),
+      fd_ret: (((d.fd / fd_0) - 1) * 100).toFixed(2),
+    };
+  });
 
   const toggleSeries = (key) => {
     setActiveSeries((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -65,17 +93,30 @@ export default function BenchmarkComparison({ benchmarkData }) {
         <div className="bg-fintech-card border border-fintech-border p-3.5 rounded-xl shadow-xl text-xs font-mono">
           <div className="text-fintech-textHeading font-bold mb-2 pb-1.5 border-b border-fintech-border flex items-center justify-between gap-4">
             <span>{label}</span>
-            <span className="text-[10px] text-fintech-textMuted font-sans">Valuation</span>
+            <span className="text-[10px] text-fintech-textMuted font-sans">
+              {isRebased ? 'Rebased (₹10L Base)' : 'Cumulative NAV'}
+            </span>
           </div>
           <div className="space-y-1.5">
-            {payload.map((entry, index) => (
-              <div key={index} className="flex items-center justify-between gap-4">
-                <span style={{ color: entry.color }} className="font-medium text-[11px]">{entry.name}:</span>
-                <span className="text-fintech-textHeading font-bold tabular-nums">
-                  ₹{Number(entry.value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                </span>
-              </div>
-            ))}
+            {payload.map((entry, index) => {
+              const retKey = `${entry.dataKey}_ret`;
+              const retVal = entry.payload && entry.payload[retKey];
+              return (
+                <div key={index} className="flex items-center justify-between gap-4">
+                  <span style={{ color: entry.color }} className="font-medium text-[11px]">{entry.name}:</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-fintech-textHeading font-bold tabular-nums">
+                      ₹{Number(entry.value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </span>
+                    {retVal !== undefined && (
+                      <span className={`text-[10px] tabular-nums font-bold ${Number(retVal) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        ({Number(retVal) >= 0 ? '+' : ''}{retVal}%)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       );
@@ -153,21 +194,49 @@ export default function BenchmarkComparison({ benchmarkData }) {
             })}
           </div>
 
-          {/* Google Finance Time Range Filter */}
-          <div className="flex items-center gap-1 bg-fintech-subtle p-1 rounded-lg border border-fintech-border text-xs font-mono font-medium">
-            {['1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'ALL'].map((range) => (
+          <div className="flex flex-wrap items-center gap-2">
+            {/* View Mode Toggle: Rebased vs Cumulative */}
+            <div className="flex items-center bg-fintech-subtle p-0.5 rounded-lg border border-fintech-border text-xs font-mono">
               <button
-                key={range}
-                onClick={() => setTimeRange(range)}
-                className={`px-2.5 py-1 rounded transition-all cursor-pointer ${
-                  timeRange === range
+                onClick={() => setViewMode('rebased')}
+                className={`px-2 py-1 rounded text-[11px] font-medium transition-all cursor-pointer ${
+                  viewMode === 'rebased'
                     ? 'bg-fintech-card text-blue-600 font-bold shadow-sm border border-fintech-border'
                     : 'text-fintech-textMuted hover:text-fintech-textHeading'
                 }`}
+                title="Normalize all series to ₹10L base at start of selected window for side-by-side comparison"
               >
-                {range}
+                Rebased (₹10L)
               </button>
-            ))}
+              <button
+                onClick={() => setViewMode('cumulative')}
+                className={`px-2 py-1 rounded text-[11px] font-medium transition-all cursor-pointer ${
+                  viewMode === 'cumulative'
+                    ? 'bg-fintech-card text-blue-600 font-bold shadow-sm border border-fintech-border'
+                    : 'text-fintech-textMuted hover:text-fintech-textHeading'
+                }`}
+                title="View actual compounding valuation in ₹ from inception"
+              >
+                Cumulative (₹)
+              </button>
+            </div>
+
+            {/* Google Finance Time Range Filter */}
+            <div className="flex items-center gap-1 bg-fintech-subtle p-1 rounded-lg border border-fintech-border text-xs font-mono font-medium">
+              {['1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'ALL'].map((range) => (
+                <button
+                  key={range}
+                  onClick={() => setTimeRange(range)}
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer ${
+                    timeRange === range
+                      ? 'bg-fintech-card text-blue-600 font-bold shadow-sm border border-fintech-border'
+                      : 'text-fintech-textMuted hover:text-fintech-textHeading'
+                  }`}
+                >
+                  {range}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
