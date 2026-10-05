@@ -480,21 +480,22 @@ async def upstox_oauth_callback(code: str, db: Session = Depends(get_db)):
     """OAuth2 callback from Upstox with authorization code"""
     upstox = UpstoxBroker(db)
     result = await upstox.exchange_code_for_token(code)
-    # Redirect to frontend dashboard with status query param
-    return RedirectResponse(url=f"http://localhost:5173/upstox-connect?status={result.get('status')}")
+    # Relative redirect to frontend so it works on port 8000, 5173, and cloud hosts
+    return RedirectResponse(url=f"/upstox-connect?status={result.get('status')}")
 
 @router.post("/upstox/config")
 def configure_upstox(cfg: UpstoxConfigModel):
-    """Dynamically set or update Upstox API credentials and persist to .env"""
+    """Dynamically set or update Upstox API credentials"""
     settings.UPSTOX_API_KEY = cfg.api_key.strip()
     settings.UPSTOX_API_SECRET = cfg.api_secret.strip()
     if cfg.redirect_uri:
         settings.UPSTOX_REDIRECT_URI = cfg.redirect_uri.strip()
     
-    # Persist to .env file
+    # Optionally persist to .env if writable
     try:
         from pathlib import Path
-        env_file = Path(".env")
+        _root = Path(__file__).resolve().parents[2]
+        env_file = _root / ".env"
         lines = []
         if env_file.exists():
             for line in env_file.read_text(encoding="utf-8").splitlines():
@@ -504,7 +505,7 @@ def configure_upstox(cfg: UpstoxConfigModel):
         lines.append(f"UPSTOX_API_SECRET={settings.UPSTOX_API_SECRET}")
         lines.append(f"UPSTOX_REDIRECT_URI={settings.UPSTOX_REDIRECT_URI}")
         env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except Exception as e:
+    except Exception:
         pass
 
     return {"status": "UPDATED", "api_key": settings.UPSTOX_API_KEY, "redirect_uri": settings.UPSTOX_REDIRECT_URI}

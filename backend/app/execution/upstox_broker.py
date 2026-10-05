@@ -108,7 +108,11 @@ class UpstoxBroker:
         token = self.db.query(UpstoxToken).filter(UpstoxToken.is_active == True).order_by(UpstoxToken.id.desc()).first()
         if token and token.access_token:
             if token.expires_at and token.expires_at < datetime.datetime.utcnow():
-                logger.info("Upstox token expired.")
+                token.is_active = False
+                try:
+                    self.db.commit()
+                except Exception:
+                    pass
                 return None
             return token.access_token
         return None

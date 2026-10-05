@@ -23,7 +23,7 @@ NSE_INSTRUMENTS: List[Dict[str, Any]] = [
     {"symbol": "SUNPHARMA.NS", "name": "Sun Pharmaceutical Industries Ltd", "sector": "Healthcare", "upstox_key": "NSE_EQ|INE044A01036", "lot_size": 1, "market_cap": "Large"},
     {"symbol": "TITAN.NS", "name": "Titan Company Ltd", "sector": "Consumer Goods", "upstox_key": "NSE_EQ|INE280A01028", "lot_size": 1, "market_cap": "Large"},
     {"symbol": "BAJFINANCE.NS", "name": "Bajaj Finance Ltd", "sector": "Financial Services", "upstox_key": "NSE_EQ|INE296A01024", "lot_size": 1, "market_cap": "Large"},
-    {"symbol": "TATAMOTORS.NS", "name": "Tata Motors Ltd", "sector": "Automobile", "upstox_key": "NSE_EQ|INE155A01022", "lot_size": 1, "market_cap": "Large"},
+    {"symbol": "BEL.NS", "name": "Bharat Electronics Ltd", "sector": "Capital Goods", "upstox_key": "NSE_EQ|INE263A01024", "lot_size": 1, "market_cap": "Large"},
     {"symbol": "ULTRACEMCO.NS", "name": "UltraTech Cement Ltd", "sector": "Materials", "upstox_key": "NSE_EQ|INE481G01011", "lot_size": 1, "market_cap": "Large"},
     {"symbol": "WIPRO.NS", "name": "Wipro Ltd", "sector": "Information Technology", "upstox_key": "NSE_EQ|INE075A01022", "lot_size": 1, "market_cap": "Large"},
     {"symbol": "NTPC.NS", "name": "NTPC Ltd", "sector": "Power & Utilities", "upstox_key": "NSE_EQ|INE733E01010", "lot_size": 1, "market_cap": "Large"},
@@ -83,7 +83,7 @@ PRESETS: Dict[str, List[str]] = {
         "TCS.NS", "HDFCBANK.NS", "RELIANCE.NS", "NESTLEIND.NS"
     ],
     "GROWTH_MOMENTUM": [
-        "TATAMOTORS.NS", "M&M.NS", "BAJFINANCE.NS", "TITAN.NS",
+        "BEL.NS", "M&M.NS", "BAJFINANCE.NS", "TITAN.NS",
         "BHARTIARTL.NS", "LT.NS", "RELIANCE.NS", "TRENT.NS", "ADANIENT.NS"
     ]
 }

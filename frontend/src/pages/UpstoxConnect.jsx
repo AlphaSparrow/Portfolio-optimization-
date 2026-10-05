@@ -15,9 +15,13 @@ import { getUpstoxStatus, updateUpstoxConfig } from '../api';
 
 export default function UpstoxConnect({ onStatusChange }) {
   const [status, setStatus] = useState(null);
-  const [apiKey, setApiKey] = useState('27b3ae9f-da6b-4b67-a0dd-b6ea9265efca');
+  const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
-  const [redirectUri, setRedirectUri] = useState('http://localhost:8000/api/upstox/callback');
+  const [redirectUri, setRedirectUri] = useState(
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/api/upstox/callback`
+      : 'http://localhost:8000/api/upstox/callback'
+  );
   const [manualCode, setManualCode] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -59,7 +63,7 @@ export default function UpstoxConnect({ onStatusChange }) {
         api_secret: apiSecret.trim(),
         redirect_uri: redirectUri.trim()
       });
-      setMsg('API configuration saved successfully to .env');
+      setMsg('Upstox API credentials saved successfully.');
       loadStatus();
       if (onStatusChange) onStatusChange();
     } catch (err) {
@@ -72,7 +76,7 @@ export default function UpstoxConnect({ onStatusChange }) {
   const handleExchangeManualCode = (e) => {
     e.preventDefault();
     if (!manualCode) return;
-    window.location.href = `http://localhost:8000/api/upstox/callback?code=${manualCode.trim()}`;
+    window.location.href = `/api/upstox/callback?code=${manualCode.trim()}`;
   };
 
   const isLive = status?.is_live;

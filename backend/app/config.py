@@ -1,13 +1,16 @@
 import os
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     APP_NAME: str = "Quant Portfolio Optimization & Paper Trading"
     VERSION: str = "1.0.0"
     DEBUG: bool = True
     
-    # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./quant_platform.db")
+    # Database (always project root)
+    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{_PROJECT_ROOT / 'quant_platform.db'}")
     
     # Upstox API v2 Configuration
     UPSTOX_API_KEY: str = os.getenv("UPSTOX_API_KEY", "")

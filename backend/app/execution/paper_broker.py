@@ -406,17 +406,24 @@ class PaperBroker:
             total_fees_paid=total_fees
         )
         self.db.add(rebalance_record)
-        self.db.commit()
-
         state = self.get_portfolio_state(current_prices)
-        nav_record = DailyNAV(
-            portfolio_id=self.portfolio_id,
-            date=datetime.date.today().strftime("%Y-%m-%d"),
-            nav=state["nav"],
-            cash=state["cash"],
-            invested_value=state["invested_value"]
-        )
-        self.db.add(nav_record)
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+        existing_nav = self.db.query(DailyNAV).filter(
+            DailyNAV.portfolio_id == self.portfolio_id,
+            DailyNAV.date == today_str
+        ).first()
+        if existing_nav:
+            existing_nav.nav = state["nav"]
+            existing_nav.cash = state["cash"]
+            existing_nav.invested_value = state["invested_value"]
+        else:
+            self.db.add(DailyNAV(
+                portfolio_id=self.portfolio_id,
+                date=today_str,
+                nav=state["nav"],
+                cash=state["cash"],
+                invested_value=state["invested_value"]
+            ))
         self.db.commit()
 
         return {
@@ -486,13 +493,17 @@ class PaperBroker:
         """
         nav_records = self.db.query(DailyNAV).filter(
             DailyNAV.portfolio_id == self.portfolio_id
-        ).order_by(DailyNAV.date.asc()).all()
+        ).order_by(DailyNAV.date.asc(), DailyNAV.id.asc()).all()
 
         if not nav_records:
             return {"dates": [], "series": {}, "metrics_table": []}
 
-        dates = [r.date for r in nav_records]
-        port_navs = [r.nav for r in nav_records]
+        date_to_nav = {}
+        for r in nav_records:
+            date_to_nav[r.date] = r.nav
+
+        dates = sorted(list(date_to_nav.keys()))
+        port_navs = [date_to_nav[d] for d in dates]
         N = len(dates)
 
         init_capital = port_navs[0]

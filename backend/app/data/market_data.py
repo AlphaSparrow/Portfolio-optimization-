@@ -43,20 +43,27 @@ class MarketDataProvider:
             end_date = datetime.date.today().strftime("%Y-%m-%d")
 
         cache_key = f"prices_{'_'.join(sorted(symbols)[:5])}_{len(symbols)}_{start_date}_{end_date}.pkl"
+        candidate_dirs = [
+            CACHE_DIR,
+            Path(__file__).resolve().parent / "cache",
+            Path(__file__).resolve().parents[3] / ".cache" / "market_data",
+            Path.cwd() / ".cache" / "market_data",
+        ]
         candidate_files = ["nifty50_2019_2023.pkl", "nifty50_recent.pkl"] if start_date < "2024-01-01" else ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]
         for master_file in candidate_files:
-            master_path = CACHE_DIR / master_file
-            if master_path.exists():
-                try:
-                    m_df = pd.read_pickle(master_path)
-                    m_df.index = pd.to_datetime(m_df.index).date
-                    avail = [s for s in symbols if s in m_df.columns]
-                    if len(avail) == len(symbols) or (len(symbols) >= 10 and len(avail) >= int(len(symbols) * 0.8)):
-                        res_df = m_df[avail].dropna()
-                        if len(res_df) >= 30:
-                            return res_df
-                except Exception as e:
-                    logger.debug(f"Could not load from {master_file}: {e}")
+            for c_dir in candidate_dirs:
+                master_path = c_dir / master_file
+                if master_path.exists():
+                    try:
+                        m_df = pd.read_pickle(master_path)
+                        m_df.index = pd.to_datetime(m_df.index).date
+                        avail = [s for s in symbols if s in m_df.columns]
+                        if len(avail) == len(symbols) or (len(symbols) >= 3 and len(avail) >= 2):
+                            res_df = m_df[avail].dropna()
+                            if len(res_df) >= 30:
+                                return res_df
+                    except Exception as e:
+                        logger.debug(f"Could not load from {master_file}: {e}")
 
         # Attempt 1: Upstox API if token is provided
         df = None
@@ -70,17 +77,20 @@ class MarketDataProvider:
         # If still empty, try partial slice from master cache
         if df is None or df.empty:
             for master_file in ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]:
-                master_path = CACHE_DIR / master_file
-                if master_path.exists():
-                    try:
-                        m_df = pd.read_pickle(master_path)
-                        m_df.index = pd.to_datetime(m_df.index).date
-                        avail = [s for s in symbols if s in m_df.columns]
-                        if len(avail) >= max(1, int(len(symbols) * 0.7)):
-                            df = m_df[avail].dropna()
-                            break
-                    except Exception:
-                        pass
+                for c_dir in candidate_dirs:
+                    master_path = c_dir / master_file
+                    if master_path.exists():
+                        try:
+                            m_df = pd.read_pickle(master_path)
+                            m_df.index = pd.to_datetime(m_df.index).date
+                            avail = [s for s in symbols if s in m_df.columns]
+                            if len(avail) >= 2:
+                                df = m_df[avail].dropna()
+                                break
+                        except Exception:
+                            pass
+                if df is not None and not df.empty:
+                    break
 
         if df is None or df.empty:
             raise ValueError(
@@ -93,6 +103,7 @@ class MarketDataProvider:
 
         # Save to pickle cache
         try:
+            cache_path = CACHE_DIR / cache_key
             df.to_pickle(cache_path)
         except Exception as e:
             logger.debug(f"Could not write cache file: {e}")
