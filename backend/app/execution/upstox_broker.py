@@ -173,6 +173,7 @@ class UpstoxBroker:
             "is_live": bool(token),
             "is_configured": has_api_keys,
             "api_key_configured": bool(self.api_key),
+            "api_key": self.api_key or "",
             "redirect_uri": self.redirect_uri,
             "user_id": token_record.user_id if token_record else None,
             "token_expires_at": token_record.expires_at.isoformat() if (token_record and token_record.expires_at) else None,

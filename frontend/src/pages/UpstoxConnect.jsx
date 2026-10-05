@@ -39,6 +39,7 @@ export default function UpstoxConnect({ onStatusChange }) {
       const res = await getUpstoxStatus();
       setStatus(res);
       if (res.redirect_uri) setRedirectUri(res.redirect_uri);
+      if (res.api_key) setApiKey(res.api_key);
     } catch (err) {
       console.error(err);
     } finally {
