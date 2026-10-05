@@ -166,8 +166,15 @@ def run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
             detail=f"Need at least {req.lookback_days + 10} days of data for backtesting."
         )
 
+    bm_df = None
+    try:
+        bm_df = provider.fetch_historical_prices(["^CRSLDX", "^NSEMDCP50", "^NSEI"], start_date=req.start_date)
+    except Exception:
+        pass
+
     engine = WalkForwardEngine(
         prices=price_df,
+        benchmark_prices=bm_df,
         lookback_days=req.lookback_days,
         rebalance_days=req.rebalance_days,
         covariance_estimator=req.covariance,
@@ -425,8 +432,8 @@ def get_attribution(symbols: Optional[str] = Query(None), db: Session = Depends(
         for s in syms:
             bm_weights[s] = sub_w
 
-    all_symbols = sorted(list(set(list(port_weights.keys()) + list(bm_weights.keys()))))
-    price_df = provider.fetch_historical_prices(all_symbols)
+    all_symbols = sorted(list(set(list(port_weights.keys()) + list(bm_weights.keys()) + ["^NSEI"])))
+    price_df = provider.fetch_historical_prices(all_symbols, start_date="2021-01-01")
     returns = price_df.pct_change().dropna()
     mean_rets = (returns.mean() * 252).to_dict()
 
@@ -450,7 +457,7 @@ def get_attribution(symbols: Optional[str] = Query(None), db: Session = Depends(
     else:
         port_series = returns.mean(axis=1)
 
-    mkt_returns = returns.mean(axis=1)
+    mkt_returns = returns["^NSEI"] if "^NSEI" in returns.columns else returns.mean(axis=1)
     factor_results = run_factor_regression(port_series, market_returns=mkt_returns)
 
     return {
@@ -509,6 +516,24 @@ def configure_upstox(cfg: UpstoxConfigModel):
         pass
 
     return {"status": "UPDATED", "api_key": settings.UPSTOX_API_KEY, "redirect_uri": settings.UPSTOX_REDIRECT_URI}
+
+class DirectTokenModel(BaseModel):
+    access_token: str
+    user_id: Optional[str] = "upstox_trader"
+
+@router.post("/upstox/token")
+def set_direct_token(data: DirectTokenModel, db: Session = Depends(get_db)):
+    """Directly activate an Upstox access token without going through OAuth redirect"""
+    upstox = UpstoxBroker(db)
+    result = upstox.save_direct_token(data.access_token, user_id=data.user_id or "upstox_trader")
+    return result
+
+@router.post("/upstox/disconnect")
+def disconnect_upstox(db: Session = Depends(get_db)):
+    """Disconnect active Upstox session and revert to paper trading simulator"""
+    upstox = UpstoxBroker(db)
+    result = upstox.disconnect()
+    return result
 
 
 # --- 7. Custom Trading Strategies Engine ---

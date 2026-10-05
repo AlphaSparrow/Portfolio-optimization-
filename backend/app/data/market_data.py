@@ -49,7 +49,16 @@ class MarketDataProvider:
             Path(__file__).resolve().parents[3] / ".cache" / "market_data",
             Path.cwd() / ".cache" / "market_data",
         ]
-        candidate_files = ["nifty50_2019_2023.pkl", "nifty50_recent.pkl"] if start_date < "2024-01-01" else ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]
+        candidate_files = [
+            "nifty50_all_2019_2026.pkl",
+            "prices_ADANIENT.NS_ADANIPORTS.NS_APOLLOHOSP.NS_ASIANPAINT.NS_AXISBANK.NS_50_2021-01-01_2026-10-04.pkl",
+            "nifty50_recent.pkl",
+            "nifty50_2019_2023.pkl"
+        ]
+
+        start_dt = pd.to_datetime(start_date).date()
+        end_dt = pd.to_datetime(end_date).date()
+
         for master_file in candidate_files:
             for c_dir in candidate_dirs:
                 master_path = c_dir / master_file
@@ -59,9 +68,11 @@ class MarketDataProvider:
                         m_df.index = pd.to_datetime(m_df.index).date
                         avail = [s for s in symbols if s in m_df.columns]
                         if len(avail) == len(symbols) or (len(symbols) >= 3 and len(avail) >= 2):
-                            res_df = m_df[avail].dropna()
-                            if len(res_df) >= 30:
-                                return res_df
+                            # Slice by requested date range
+                            mask = (m_df.index >= start_dt) & (m_df.index <= end_dt)
+                            sub_df = m_df.loc[mask, avail].dropna(how="all").ffill().bfill()
+                            if len(sub_df) >= 15:
+                                return sub_df
                     except Exception as e:
                         logger.debug(f"Could not load from {master_file}: {e}")
 
@@ -76,7 +87,7 @@ class MarketDataProvider:
 
         # If still empty, try partial slice from master cache
         if df is None or df.empty:
-            for master_file in ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]:
+            for master_file in candidate_files:
                 for c_dir in candidate_dirs:
                     master_path = c_dir / master_file
                     if master_path.exists():
@@ -85,8 +96,14 @@ class MarketDataProvider:
                             m_df.index = pd.to_datetime(m_df.index).date
                             avail = [s for s in symbols if s in m_df.columns]
                             if len(avail) >= 2:
-                                df = m_df[avail].dropna()
-                                break
+                                mask = (m_df.index >= start_dt) & (m_df.index <= end_dt)
+                                sub_df = m_df.loc[mask, avail].dropna(how="all").ffill().bfill()
+                                if len(sub_df) >= 15:
+                                    df = sub_df
+                                    break
+                                elif len(m_df[avail]) >= 15:
+                                    df = m_df[avail].ffill().bfill().dropna()
+                                    break
                         except Exception:
                             pass
                 if df is not None and not df.empty:

@@ -23,6 +23,7 @@ __pycache__/
 .cache/market_data/*
 !.cache/market_data/nifty50_2019_2023.pkl
 !.cache/market_data/nifty50_recent.pkl
+!.cache/market_data/nifty50_all_2019_2026.pkl
 
 /dist/
 build/

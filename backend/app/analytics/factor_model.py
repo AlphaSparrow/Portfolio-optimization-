@@ -43,23 +43,40 @@ def run_factor_regression(
     # Load real benchmark market data if not passed or mismatched
     if market_returns is None or len(market_returns.dropna()) < 10:
         from pathlib import Path
-        cache_dir = Path("./.cache/market_data")
+        candidate_dirs = [
+            Path(__file__).resolve().parents[3] / ".cache" / "market_data",
+            Path(__file__).resolve().parent.parent / "data" / "cache",
+            Path("./.cache/market_data"),
+            Path("backend/app/data/cache"),
+        ]
         m_df = None
-        for fn in ["nifty50_recent.pkl", "nifty50_2019_2023.pkl"]:
-            fp = cache_dir / fn
-            if fp.exists():
-                try:
-                    m_df = pd.read_pickle(fp)
-                    break
-                except Exception:
-                    pass
+        for c_dir in candidate_dirs:
+            for fn in ["nifty50_all_2019_2026.pkl", "nifty50_recent.pkl", "nifty50_2019_2023.pkl"]:
+                fp = c_dir / fn
+                if fp.exists():
+                    try:
+                        m_df = pd.read_pickle(fp)
+                        break
+                    except Exception:
+                        pass
+            if m_df is not None:
+                break
 
         if m_df is not None:
+            m_df.index = pd.to_datetime(m_df.index).date
             m_rets = m_df.pct_change().dropna()
-            market_returns = m_rets.mean(axis=1)
-            # Size proxy: smaller cap quintile minus top decile
+            if "^NSEI" in m_rets.columns:
+                market_returns = m_rets["^NSEI"]
+            else:
+                market_returns = m_rets.mean(axis=1)
+
+            # Size proxy: Midcap minus Largecap
             if size_returns is None:
-                size_returns = m_rets.iloc[:, -12:].mean(axis=1) - m_rets.iloc[:, :8].mean(axis=1)
+                if "^NSEMDCP50" in m_rets.columns and "^NSEI" in m_rets.columns:
+                    size_returns = m_rets["^NSEMDCP50"] - m_rets["^NSEI"]
+                else:
+                    size_returns = m_rets.iloc[:, -10:].mean(axis=1) - m_rets.iloc[:, :10].mean(axis=1)
+
             # Value proxy: high dividend/value commodities & energy minus tech/fmcg
             if value_returns is None:
                 val_cols = [c for c in m_rets.columns if any(k in c for k in ['COALINDIA', 'ONGC', 'BPCL', 'NTPC', 'TATASTEEL'])]

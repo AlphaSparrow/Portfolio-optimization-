@@ -9,6 +9,7 @@ export default function Backtest() {
   const [covariance, setCovariance] = useState('ledoit_wolf');
   const [maxAssetWeight, setMaxAssetWeight] = useState(0.25);
   const [includeCosts, setIncludeCosts] = useState(true);
+  const [startDate, setStartDate] = useState('2021-01-01');
 
   const [loading, setLoading] = useState(false);
   const [backtestResult, setBacktestResult] = useState(null);
@@ -25,7 +26,7 @@ export default function Backtest() {
         covariance,
         max_asset_weight: Number(maxAssetWeight),
         include_costs: includeCosts,
-        start_date: '2021-01-01'
+        start_date: startDate
       });
       setBacktestResult(res);
     } catch (err) {
@@ -68,7 +69,23 @@ export default function Backtest() {
 
       {/* Control Panel Bar */}
       <div className="bg-fintech-card border border-fintech-border rounded-xl p-4 shadow-fintech-card transition-all">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end font-mono text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end font-mono text-xs">
+          <div>
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-fintech-textMuted block mb-1.5 font-sans">
+              Historical Horizon
+            </label>
+            <select
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full bg-fintech-subtle border border-fintech-border rounded-lg px-2.5 py-2 text-fintech-textHeading focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-colors"
+            >
+              <option value="2019-01-01">2019 - Present (Full 7Y)</option>
+              <option value="2021-01-01">2021 - Present (5Y Cycle)</option>
+              <option value="2023-01-01">2023 - Present (3Y Period)</option>
+              <option value="2024-01-01">2024 - Present (2Y Recent)</option>
+            </select>
+          </div>
+
           <div>
             <label className="text-[10px] font-semibold uppercase tracking-wider text-fintech-textMuted block mb-1.5 font-sans">
               Lookback Window

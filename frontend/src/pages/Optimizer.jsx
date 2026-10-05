@@ -57,6 +57,7 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
   const [maxAssetWeight, setMaxAssetWeight] = useState(0.25);
   const [maxSectorWeight, setMaxSectorWeight] = useState(0.35);
   const [cashBuffer, setCashBuffer] = useState(0.02);
+  const [startDate, setStartDate] = useState('2021-01-01');
 
   // Black-Litterman views state
   const [viewSymbol, setViewSymbol] = useState('INFY.NS');
@@ -164,6 +165,7 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
           max_asset_weight: Number(maxAssetWeight),
           max_sector_weight: Number(maxSectorWeight),
           cash_buffer: Number(cashBuffer),
+          start_date: startDate,
           views: Object.keys(views).length > 0 ? views : undefined
         }),
         getEfficientFrontier(selectedSymbols, covariance).catch((err) => {
@@ -362,6 +364,23 @@ export default function Optimizer({ setActiveTab, onRebalanceDone }) {
                 <option value="sample">Sample Covariance (Annualized)</option>
                 <option value="rmt">Random Matrix Theory (Marchenko-Pastur RMT)</option>
                 <option value="three_factor">3-Factor Structured (Market, SMB, HML)</option>
+              </select>
+            </div>
+
+            {/* Historical Calibration Period */}
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-fintech-textMuted block mb-1.5">
+                Historical Calibration Horizon
+              </label>
+              <select
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full bg-fintech-subtle border border-fintech-border rounded-lg px-3 py-2 text-xs font-mono text-fintech-textHeading focus:border-blue-600 outline-none"
+              >
+                <option value="2019-01-01">2019 - Present (Full 7-Year History)</option>
+                <option value="2021-01-01">2021 - Present (5-Year Cycle)</option>
+                <option value="2023-01-01">2023 - Present (3-Year Bull Run)</option>
+                <option value="2024-01-01">2024 - Present (2-Year Recent)</option>
               </select>
             </div>
 

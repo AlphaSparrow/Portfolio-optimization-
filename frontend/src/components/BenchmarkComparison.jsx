@@ -37,6 +37,14 @@ export default function BenchmarkComparison({ benchmarkData }) {
     filteredData = chart_data.slice(-126);
   } else if (timeRange === 'YTD') {
     filteredData = chart_data.slice(-150);
+  } else if (timeRange === '1Y') {
+    filteredData = chart_data.slice(-252);
+  } else if (timeRange === '3Y') {
+    filteredData = chart_data.slice(-756);
+  } else if (timeRange === '5Y') {
+    filteredData = chart_data.slice(-1260);
+  } else if (timeRange === 'ALL') {
+    filteredData = chart_data;
   }
 
   const toggleSeries = (key) => {
@@ -147,11 +155,11 @@ export default function BenchmarkComparison({ benchmarkData }) {
 
           {/* Google Finance Time Range Filter */}
           <div className="flex items-center gap-1 bg-fintech-subtle p-1 rounded-lg border border-fintech-border text-xs font-mono font-medium">
-            {['1M', '3M', '6M', 'YTD', '1Y'].map((range) => (
+            {['1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y', 'ALL'].map((range) => (
               <button
                 key={range}
                 onClick={() => setTimeRange(range)}
-                className={`px-2.5 py-1 rounded transition-all ${
+                className={`px-2.5 py-1 rounded transition-all cursor-pointer ${
                   timeRange === range
                     ? 'bg-fintech-card text-blue-600 font-bold shadow-sm border border-fintech-border'
                     : 'text-fintech-textMuted hover:text-fintech-textHeading'

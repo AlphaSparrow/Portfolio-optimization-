@@ -53,7 +53,7 @@ class PaperBroker:
         if the ledger has fewer than 10 daily records.
         """
         existing_navs = self.db.query(DailyNAV).filter(DailyNAV.portfolio_id == self.portfolio_id).count()
-        if existing_navs >= 10:
+        if existing_navs >= 500:
             return
 
         portfolio = self._ensure_portfolio_exists()
@@ -101,6 +101,8 @@ class PaperBroker:
             ("LT.NS", "BUY", 45, 3150.0, 3153.2, 26.4, "2024-07-22 13:10:44", "FILLED"),
         ]
 
+        # Clear existing orders to avoid duplicates
+        self.db.query(Order).filter(Order.portfolio_id == self.portfolio_id).delete()
         for sym, o_type, shrs, req_p, fill_p, fees, dt_str, st in human_orders:
             exec_time = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
             ord_entry = Order(
@@ -117,30 +119,43 @@ class PaperBroker:
             )
             self.db.add(ord_entry)
 
-        # Seed DailyNAV series over past 180 trading days
-        start_date = datetime.date.today() - datetime.timedelta(days=260)
-        dates = pd.date_range(start=start_date, end=datetime.date.today(), freq="B").date
-        if len(dates) > 180:
-            dates = dates[-180:]
+        # Clear old DailyNAV records to replace with continuous multi-year real price history
+        self.db.query(DailyNAV).filter(DailyNAV.portfolio_id == self.portfolio_id).delete()
 
-        np.random.seed(42)
-        # Portfolio outperforms Nifty 500 with lower vol: 15% CAGR, 11% vol
-        daily_drift = 0.155 / 252.0
-        daily_vol = 0.11 / np.sqrt(252.0)
-        shocks = np.random.normal(daily_drift, daily_vol, size=len(dates))
+        # Seed DailyNAV series over 5+ years of real historical trading days
+        from backend.app.data.market_data import MarketDataProvider
+        provider = MarketDataProvider()
+        stock_syms = [s[0] for s in initial_stocks]
+        try:
+            hist_prices = provider.fetch_historical_prices(stock_syms, start_date="2021-01-01")
+        except Exception:
+            hist_prices = None
 
-        current_val = 1_000_000.0
         nav_entries = []
-
-        for i, dt in enumerate(dates):
-            current_val *= (1.0 + shocks[i])
-            nav_entries.append(DailyNAV(
-                portfolio_id=self.portfolio_id,
-                date=dt.strftime("%Y-%m-%d"),
-                nav=round(current_val, 2),
-                cash=round(portfolio.current_cash, 2),
-                invested_value=round(max(0.0, current_val - portfolio.current_cash), 2)
-            ))
+        if hist_prices is not None and not hist_prices.empty:
+            for dt, row in hist_prices.iterrows():
+                dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)
+                invested_val = sum(shares * float(row[sym]) for sym, shares, _, _ in initial_stocks if sym in row)
+                total_nav = portfolio.current_cash + invested_val
+                nav_entries.append(DailyNAV(
+                    portfolio_id=self.portfolio_id,
+                    date=dt_str,
+                    nav=round(total_nav, 2),
+                    cash=round(portfolio.current_cash, 2),
+                    invested_value=round(invested_val, 2)
+                ))
+        else:
+            start_date = datetime.date.today() - datetime.timedelta(days=365 * 4)
+            dates = pd.date_range(start=start_date, end=datetime.date.today(), freq="B").date
+            cur_val = 1_000_000.0
+            for dt in dates:
+                nav_entries.append(DailyNAV(
+                    portfolio_id=self.portfolio_id,
+                    date=dt.strftime("%Y-%m-%d"),
+                    nav=round(cur_val, 2),
+                    cash=round(portfolio.current_cash, 2),
+                    invested_value=round(max(0.0, cur_val - portfolio.current_cash), 2)
+                ))
 
         self.db.add_all(nav_entries)
 
@@ -508,35 +523,42 @@ class PaperBroker:
 
         init_capital = port_navs[0]
 
-        # Generate correlated realistic benchmark series matching Indian asset class dynamics
-        np.random.seed(101)
-        # 1. Fixed Deposit: steady 7.10% annual compounding
+        # Real historical benchmark market data aligned with portfolio dates
+        from backend.app.data.market_data import MarketDataProvider
+        provider = MarketDataProvider()
+        try:
+            bm_df = provider.fetch_historical_prices(["^CRSLDX", "^NSEMDCP50", "^NSEI"], start_date=dates[0], end_date=dates[-1])
+            bm_df.index = [d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d) for d in bm_df.index]
+        except Exception:
+            bm_df = None
+
         daily_fd_rate = (1.0 + 0.0710) ** (1.0 / 252.0) - 1.0
         fd_series = [init_capital * ((1.0 + daily_fd_rate) ** t) for t in range(N)]
 
-        # 2. Nifty 500: ~13.8% CAGR, ~14.5% volatility
-        nifty500_daily_drift = 0.138 / 252.0
-        nifty500_daily_vol = 0.145 / np.sqrt(252.0)
-        n500_shocks = np.random.normal(nifty500_daily_drift, nifty500_daily_vol, size=N)
-        n500_series = [init_capital]
-        for t in range(1, N):
-            n500_series.append(n500_series[-1] * (1.0 + n500_shocks[t]))
+        if bm_df is not None and not bm_df.empty:
+            aligned_bm = pd.DataFrame(index=dates).join(bm_df).ffill().bfill()
 
-        # 3. Nifty 150 (Midcap): ~17.5% CAGR, ~18.8% volatility (higher beta, higher drawdown)
-        n150_daily_drift = 0.175 / 252.0
-        n150_daily_vol = 0.188 / np.sqrt(252.0)
-        n150_shocks = 0.75 * n500_shocks + 0.66 * np.random.normal(n150_daily_drift, n150_daily_vol, size=N)
-        n150_series = [init_capital]
-        for t in range(1, N):
-            n150_series.append(n150_series[-1] * (1.0 + n150_shocks[t]))
+            if "^CRSLDX" in aligned_bm.columns:
+                n500_ret = aligned_bm["^CRSLDX"].pct_change().fillna(0.0)
+                n500_series = list((init_capital * (1.0 + n500_ret).cumprod()).values)
+            else:
+                n500_series = [init_capital * ((1.0 + (0.138/252)) ** t) for t in range(N)]
 
-        # 4. Active Mutual Fund (Flexi Cap): ~15.2% CAGR, ~13.6% volatility (managed alpha)
-        mf_daily_drift = 0.152 / 252.0
-        mf_daily_vol = 0.136 / np.sqrt(252.0)
-        mf_shocks = 0.85 * n500_shocks + 0.52 * np.random.normal(mf_daily_drift, mf_daily_vol, size=N)
-        mf_series = [init_capital]
-        for t in range(1, N):
-            mf_series.append(mf_series[-1] * (1.0 + mf_shocks[t]))
+            if "^NSEMDCP50" in aligned_bm.columns:
+                n150_ret = aligned_bm["^NSEMDCP50"].pct_change().fillna(0.0)
+                n150_series = list((init_capital * (1.0 + n150_ret).cumprod()).values)
+            else:
+                n150_series = [init_capital * ((1.0 + (0.175/252)) ** t) for t in range(N)]
+
+            if "^CRSLDX" in aligned_bm.columns:
+                mf_ret = 0.70 * n500_ret + 0.30 * (n150_ret if "^NSEMDCP50" in aligned_bm.columns else n500_ret) + (0.012 / 252.0)
+                mf_series = list((init_capital * (1.0 + mf_ret).cumprod()).values)
+            else:
+                mf_series = [init_capital * ((1.0 + (0.152/252)) ** t) for t in range(N)]
+        else:
+            n500_series = [init_capital * ((1.0 + (0.138/252)) ** t) for t in range(N)]
+            n150_series = [init_capital * ((1.0 + (0.175/252)) ** t) for t in range(N)]
+            mf_series = [init_capital * ((1.0 + (0.152/252)) ** t) for t in range(N)]
 
         # Helper to compute Portfolio Visualizer style metrics
         def compute_summary(nav_list, name, color):
@@ -574,17 +596,17 @@ class PaperBroker:
             return {
                 "name": name,
                 "color": color,
-                "current_val": round(nav_list[-1], 2),
-                "total_return_pct": round(total_ret, 2),
-                "cagr_pct": round(cagr, 2),
-                "volatility_pct": round(ann_vol, 2),
-                "sharpe_ratio": round(sharpe, 2),
-                "sortino_ratio": round(sortino, 2),
-                "max_drawdown_pct": round(max_dd, 2),
-                "calmar_ratio": round(calmar, 2),
-                "beta_nifty500": round(beta, 2),
-                "alpha_pct": round(alpha, 2),
-                "correlation": round(corr, 2)
+                "current_val": round(float(nav_list[-1]), 2),
+                "total_return_pct": round(float(total_ret), 2),
+                "cagr_pct": round(float(cagr), 2),
+                "volatility_pct": round(float(ann_vol), 2),
+                "sharpe_ratio": round(float(sharpe), 2),
+                "sortino_ratio": round(float(sortino), 2),
+                "max_drawdown_pct": round(float(max_dd), 2),
+                "calmar_ratio": round(float(calmar), 2),
+                "beta_nifty500": round(float(beta), 2),
+                "alpha_pct": round(float(alpha), 2),
+                "correlation": round(float(corr), 2)
             }
 
         table = [
@@ -600,11 +622,11 @@ class PaperBroker:
         for i, dt in enumerate(dates):
             chart_data.append({
                 "date": dt,
-                "portfolio": round(port_navs[i], 2),
-                "nifty_500": round(n500_series[i], 2),
-                "nifty_150": round(n150_series[i], 2),
-                "mutual_fund": round(mf_series[i], 2),
-                "fd": round(fd_series[i], 2),
+                "portfolio": round(float(port_navs[i]), 2),
+                "nifty_500": round(float(n500_series[i]), 2),
+                "nifty_150": round(float(n150_series[i]), 2),
+                "mutual_fund": round(float(mf_series[i]), 2),
+                "fd": round(float(fd_series[i]), 2),
             })
 
         return {

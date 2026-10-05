@@ -226,15 +226,28 @@ class WalkForwardEngine:
             total_trades_dict[strat] = int(np.sum(execution_weights.diff().abs().values > 0.0) / 2)
 
         # 3. Market Benchmarks
-        mkt_ret = returns_df.mean(axis=1)
         daily_fd = (1.0 + 0.0710) ** (1.0 / 252.0) - 1.0
 
-        bm_navs = {
-            "NIFTY 500": self.initial_capital * (1.0 + mkt_ret * 0.95).cumprod(),
-            "NIFTY 150 Midcap": self.initial_capital * (1.0 + mkt_ret * 1.15).cumprod(),
-            "Bank FD (7.1%)": self.initial_capital * (1.0 + pd.Series(daily_fd, index=returns_df.index)).cumprod(),
-            "Flexi-Cap Mutual Fund": self.initial_capital * (1.0 + mkt_ret * 0.98 + (0.015 / 252.0)).cumprod()
-        }
+        if isinstance(self.benchmark, pd.DataFrame) and not self.benchmark.empty:
+            bm_df_aligned = pd.DataFrame(index=returns_df.index).join(self.benchmark).ffill().bfill()
+            bm_rets = bm_df_aligned.pct_change().fillna(0.0)
+            n500_ret = bm_rets["^CRSLDX"] if "^CRSLDX" in bm_rets.columns else returns_df.mean(axis=1) * 0.95
+            n150_ret = bm_rets["^NSEMDCP50"] if "^NSEMDCP50" in bm_rets.columns else returns_df.mean(axis=1) * 1.15
+
+            bm_navs = {
+                "NIFTY 500": self.initial_capital * (1.0 + n500_ret).cumprod(),
+                "NIFTY 150 Midcap": self.initial_capital * (1.0 + n150_ret).cumprod(),
+                "Bank FD (7.1%)": self.initial_capital * (1.0 + pd.Series(daily_fd, index=returns_df.index)).cumprod(),
+                "Flexi-Cap Mutual Fund": self.initial_capital * (1.0 + (0.70 * n500_ret + 0.30 * n150_ret + (0.012 / 252.0))).cumprod()
+            }
+        else:
+            mkt_ret = returns_df.mean(axis=1)
+            bm_navs = {
+                "NIFTY 500": self.initial_capital * (1.0 + mkt_ret * 0.95).cumprod(),
+                "NIFTY 150 Midcap": self.initial_capital * (1.0 + mkt_ret * 1.15).cumprod(),
+                "Bank FD (7.1%)": self.initial_capital * (1.0 + pd.Series(daily_fd, index=returns_df.index)).cumprod(),
+                "Flexi-Cap Mutual Fund": self.initial_capital * (1.0 + mkt_ret * 0.98 + (0.015 / 252.0)).cumprod()
+            }
 
         # 4. Metrics & Curve Formulation
         metrics_table = {}

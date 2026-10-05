@@ -117,6 +117,50 @@ class UpstoxBroker:
             return token.access_token
         return None
 
+    def save_direct_token(self, access_token: str, user_id: str = "upstox_trader", expires_in_hours: int = 24) -> Dict[str, Any]:
+        """
+        Directly store an access token generated from Upstox Dev Console or Python login script.
+        Bypasses the OAuth authorization URL dialog.
+        """
+        clean_token = access_token.strip()
+        if not clean_token:
+            return {"status": "ERROR", "error": "Access token cannot be empty"}
+
+        expires_at = datetime.datetime.utcnow() + datetime.timedelta(hours=expires_in_hours)
+
+        # Deactivate older tokens
+        self.db.query(UpstoxToken).filter(UpstoxToken.is_active == True).update({"is_active": False})
+
+        token_record = UpstoxToken(
+            access_token=clean_token,
+            refresh_token=None,
+            expires_at=expires_at,
+            user_id=user_id.strip() if user_id else "upstox_trader",
+            is_active=True
+        )
+        self.db.add(token_record)
+        self.db.commit()
+
+        return {
+            "status": "SUCCESS",
+            "message": "Direct access token activated. Live Upstox mode is now enabled.",
+            "user_id": token_record.user_id,
+            "expires_at": expires_at.isoformat(),
+            "mode": "LIVE_UPSTOX",
+            "is_live": True
+        }
+
+    def disconnect(self) -> Dict[str, Any]:
+        """Disconnect Upstox session and revert back to Paper mode"""
+        self.db.query(UpstoxToken).filter(UpstoxToken.is_active == True).update({"is_active": False})
+        self.db.commit()
+        return {
+            "status": "DISCONNECTED",
+            "message": "Upstox session disconnected. Switched to Paper Trading Simulator.",
+            "mode": "PAPER_MODE",
+            "is_live": False
+        }
+
     def get_status(self) -> Dict[str, Any]:
         """Returns connection status (LIVE_UPSTOX or PAPER_MODE)"""
         token = self.get_active_token()

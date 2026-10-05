@@ -43,6 +43,8 @@ export const getParetoFrontier = (symbols, covariance = 'ledoit_wolf') =>
 export const getMarketOverview = () => api.get('/market/overview');
 export const getCustomCodeTemplates = () => api.get('/strategies/custom-code/templates');
 export const executeCustomStrategyCode = (payload) => api.post('/strategies/custom-code/execute', payload);
+export const setDirectUpstoxToken = (payload) => api.post('/upstox/token', payload);
+export const disconnectUpstox = () => api.post('/upstox/disconnect');
 
 export default api;
 

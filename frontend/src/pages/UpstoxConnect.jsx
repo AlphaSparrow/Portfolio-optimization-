@@ -9,9 +9,11 @@ import {
   HelpCircle,
   KeyRound,
   ShieldAlert,
-  Terminal
+  Terminal,
+  LogOut,
+  Zap
 } from 'lucide-react';
-import { getUpstoxStatus, updateUpstoxConfig } from '../api';
+import { getUpstoxStatus, updateUpstoxConfig, setDirectUpstoxToken, disconnectUpstox } from '../api';
 
 export default function UpstoxConnect({ onStatusChange }) {
   const [status, setStatus] = useState(null);
@@ -23,6 +25,9 @@ export default function UpstoxConnect({ onStatusChange }) {
       : 'http://localhost:8000/api/upstox/callback'
   );
   const [manualCode, setManualCode] = useState('');
+  const [directToken, setDirectToken] = useState('');
+  const [directUserId, setDirectUserId] = useState('');
+  const [activatingToken, setActivatingToken] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -79,6 +84,44 @@ export default function UpstoxConnect({ onStatusChange }) {
     window.location.href = `/api/upstox/callback?code=${manualCode.trim()}`;
   };
 
+  const handleActivateDirectToken = async (e) => {
+    e.preventDefault();
+    if (!directToken.trim()) return;
+    setActivatingToken(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await setDirectUpstoxToken({
+        access_token: directToken.trim(),
+        user_id: directUserId.trim() || 'upstox_trader'
+      });
+      setMsg(res.message || 'Direct Access Token activated! Live Mode is now active.');
+      setDirectToken('');
+      await loadStatus();
+      if (onStatusChange) onStatusChange();
+    } catch (err) {
+      setError(err.message || 'Failed to activate direct token');
+    } finally {
+      setActivatingToken(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setLoading(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const res = await disconnectUpstox();
+      setMsg(res.message || 'Disconnected from Upstox. Switched to Paper Trading Simulator.');
+      await loadStatus();
+      if (onStatusChange) onStatusChange();
+    } catch (err) {
+      setError(err.message || 'Failed to disconnect');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const isLive = status?.is_live;
 
   return (
@@ -105,15 +148,27 @@ export default function UpstoxConnect({ onStatusChange }) {
           </p>
         </div>
 
-        <a
-          href="http://localhost:8000/api/upstox/authorize"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-sm"
-        >
-          <span>Connect Upstox</span>
-          <ExternalLink className="w-3.5 h-3.5" />
-        </a>
+        <div className="flex items-center gap-2">
+          {isLive ? (
+            <button
+              onClick={handleDisconnect}
+              className="px-3.5 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Disconnect Live Session</span>
+            </button>
+          ) : (
+            <a
+              href="/api/upstox/authorize"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all shadow-sm"
+            >
+              <span>Connect Upstox OAuth</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+        </div>
       </div>
 
       {msg && (
@@ -280,8 +335,53 @@ export default function UpstoxConnect({ onStatusChange }) {
           </form>
         </div>
 
-        {/* Right column: Auth code exchange & Guidance */}
+        {/* Right column: Direct Access Token & Auth code exchange */}
         <div className="space-y-4">
+          {/* Direct Access Token (Recommended / 1-Click) */}
+          <div className="bg-fintech-card border border-emerald-500/30 rounded-xl p-5 shadow-fintech-card relative overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold text-fintech-textHeading uppercase tracking-wider flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-emerald-600" />
+                Direct Access Token (1-Click Live)
+              </h3>
+              <span className="text-[10px] px-2 py-0.5 rounded font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Recommended
+              </span>
+            </div>
+            <p className="text-xs text-fintech-textMuted mb-3">
+              Generated an Access Token from your Upstox Developer Console or Python script? Paste it here to bypass OAuth redirects and activate Live Mode immediately:
+            </p>
+
+            <form onSubmit={handleActivateDirectToken} className="space-y-2.5 text-xs font-mono">
+              <div>
+                <input
+                  type="password"
+                  value={directToken}
+                  onChange={(e) => setDirectToken(e.target.value)}
+                  placeholder="Paste Upstox Access Token (eyJhbGciOi...)"
+                  className="w-full bg-fintech-subtle border border-fintech-border rounded-lg px-3 py-2 text-fintech-textHeading focus:border-emerald-500 outline-none text-xs"
+                  required
+                />
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={directUserId}
+                  onChange={(e) => setDirectUserId(e.target.value)}
+                  placeholder="User ID / UCC (e.g. 504281)"
+                  className="w-1/2 bg-fintech-subtle border border-fintech-border rounded-lg px-3 py-2 text-fintech-textHeading focus:border-emerald-500 outline-none text-xs"
+                />
+                <button
+                  type="submit"
+                  disabled={activatingToken || !directToken.trim()}
+                  className="w-1/2 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  {activatingToken ? 'Activating...' : 'Activate Live Mode'}
+                </button>
+              </div>
+            </form>
+          </div>
+
           <div className="bg-fintech-card border border-fintech-border rounded-xl p-5 shadow-fintech-card">
             <h3 className="text-xs font-semibold text-fintech-textHeading uppercase tracking-wider mb-2">
               Manual Auth Code Exchange
