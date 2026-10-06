@@ -59,6 +59,15 @@ class MarketDataProvider:
         start_dt = pd.to_datetime(start_date).date()
         end_dt = pd.to_datetime(end_date).date()
 
+        df = None
+
+        # Attempt 1: Upstox API if token is provided
+        if self.upstox_token:
+            df = self._fetch_upstox_historical(symbols, start_date, end_date)
+            if df is not None and not df.empty and len(df) >= 15:
+                return df.ffill().bfill().dropna()
+
+        # Attempt 2: Master cache files
         for master_file in candidate_files:
             for c_dir in candidate_dirs:
                 master_path = c_dir / master_file
@@ -76,16 +85,13 @@ class MarketDataProvider:
                     except Exception as e:
                         logger.debug(f"Could not load from {master_file}: {e}")
 
-        # Attempt 1: Upstox API if token is provided
-        df = None
-        if self.upstox_token:
-            df = self._fetch_upstox_historical(symbols, start_date, end_date)
-
-        # Attempt 2: yfinance fallback
+        # Attempt 3: yfinance fallback
         if df is None or df.empty:
             df = self._fetch_yfinance_historical(symbols, start_date, end_date)
+            if df is not None and not df.empty and len(df) >= 15:
+                return df.ffill().bfill().dropna()
 
-        # If still empty, try partial slice from master cache
+        # Attempt 4: Partial slice from master cache
         if df is None or df.empty:
             for master_file in candidate_files:
                 for c_dir in candidate_dirs:
@@ -130,9 +136,10 @@ class MarketDataProvider:
     def _fetch_upstox_historical(
         self, symbols: List[str], start_date: str, end_date: str
     ) -> Optional[pd.DataFrame]:
-        """Fetch historical daily candles via Upstox API v2"""
+        """Fetch historical daily candles via Upstox API v2 / v3"""
         try:
             import requests
+            import urllib.parse
             headers = {
                 "Accept": "application/json",
                 "Authorization": f"Bearer {self.upstox_token}"
@@ -142,21 +149,43 @@ class MarketDataProvider:
             for sym in symbols:
                 inst = get_instrument(sym)
                 inst_key = inst.get("upstox_key", f"NSE_EQ|{sym.replace('.NS', '')}")
-                # Upstox endpoint: /historical-candle/{instrument_key}/day/{to_date}/{from_date}
-                url = f"{settings.UPSTOX_BASE_API}/historical-candle/{inst_key}/day/{end_date}/{start_date}"
-                resp = requests.get(url, headers=headers, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candles = data.get("data", {}).get("candles", [])
-                    if candles:
-                        # Upstox candle format: [timestamp, open, high, low, close, volume, oi]
-                        c_df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
-                        c_df["timestamp"] = pd.to_datetime(c_df["timestamp"]).dt.date
-                        c_df = c_df.sort_values("timestamp").set_index("timestamp")
-                        price_series[sym] = c_df["close"]
+                quoted_key = urllib.parse.quote(inst_key, safe="")
+
+                # Try V3 first, then V2
+                candle_urls = [
+                    f"https://api.upstox.com/v3/historical-candle/{quoted_key}/day/{end_date}/{start_date}",
+                    f"{settings.UPSTOX_BASE_API}/historical-candle/{quoted_key}/day/{end_date}/{start_date}"
+                ]
+                candles = None
+                for url in candle_urls:
+                    try:
+                        resp = requests.get(url, headers=headers, timeout=4)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            candles = data.get("data", {}).get("candles", [])
+                            if candles:
+                                break
+                    except Exception:
+                        pass
+
+                if candles:
+                    # Upstox candle format: [timestamp, open, high, low, close, volume, oi]
+                    c_df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
+                    c_df["timestamp"] = pd.to_datetime(c_df["timestamp"]).dt.date
+                    c_df = c_df.sort_values("timestamp").set_index("timestamp")
+                    price_series[sym] = c_df["close"]
 
             if len(price_series) == len(symbols):
-                return pd.DataFrame(price_series)
+                return pd.DataFrame(price_series).ffill().bfill().dropna()
+            elif len(price_series) > 0:
+                partial_df = pd.DataFrame(price_series)
+                missing = [s for s in symbols if s not in partial_df.columns]
+                fallback_df = self._fetch_yfinance_historical(missing, start_date, end_date)
+                if fallback_df is not None and not fallback_df.empty:
+                    for col in fallback_df.columns:
+                        partial_df[col] = fallback_df[col]
+                    return partial_df.ffill().bfill().dropna()
+                return partial_df.ffill().bfill().dropna()
         except Exception as e:
             logger.warning(f"Upstox API historical fetch error: {e}")
         return None
@@ -206,74 +235,121 @@ class MarketDataProvider:
             logger.warning(f"yfinance fetch error or timeout: {e}")
         return None
 
-    def get_live_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, float]]:
+    def get_live_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Get live quote (LTP, change, high, low, volume) for symbols.
-        Uses Upstox API v2 if authenticated, otherwise yfinance/cache fallback.
+        Uses Upstox API v2 if authenticated, otherwise master cache/feed fallback.
         """
-        quotes = {}
+        quotes: Dict[str, Dict[str, Any]] = {}
 
         # 1. Try Upstox API live quote
         if self.upstox_token:
             try:
                 import requests
+                import urllib.parse
                 headers = {
                     "Accept": "application/json",
                     "Authorization": f"Bearer {self.upstox_token}"
                 }
                 keys = [get_instrument(s).get("upstox_key", f"NSE_EQ|{s.replace('.NS', '')}") for s in symbols]
-                url = f"{settings.UPSTOX_BASE_API}/market-quote/quotes?instrument_key={','.join(keys)}"
+                encoded_keys = [urllib.parse.quote(k, safe="") for k in keys]
+                url = f"{settings.UPSTOX_BASE_API}/market-quote/quotes?instrument_key={','.join(encoded_keys)}"
                 resp = requests.get(url, headers=headers, timeout=4)
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
                     for sym in symbols:
-                        key = get_instrument(sym).get("upstox_key", f"NSE_EQ|{sym.replace('.NS', '')}")
-                        if key in data:
-                            q = data[key]
+                        sym_clean = sym.replace('.NS', '')
+                        inst = get_instrument(sym)
+                        inst_key = inst.get("upstox_key", f"NSE_EQ|{sym_clean}")
+                        candidate_keys = [
+                            inst_key,
+                            inst_key.replace("|", ":"),
+                            f"NSE_EQ:{sym_clean}",
+                            f"NSE_INDEX:{sym_clean}",
+                            sym_clean,
+                            sym
+                        ]
+                        q = None
+                        for ck in candidate_keys:
+                            if ck in data:
+                                q = data[ck]
+                                break
+                        if not q:
+                            for dk, dv in data.items():
+                                if sym_clean in dk or (inst.get("isin") and inst["isin"] in dk):
+                                    q = dv
+                                    break
+                        if q:
+                            ltp = float(q.get("last_price", 0.0) or q.get("ltp", 0.0))
+                            ohlc = q.get("ohlc", {}) or {}
+                            open_p = float(ohlc.get("open", ltp))
+                            high_p = float(ohlc.get("high", ltp))
+                            low_p = float(ohlc.get("low", ltp))
+                            close_p = float(ohlc.get("close", ltp))
+                            net_change = float(q.get("net_change", ltp - close_p if close_p > 0 else 0.0))
+                            change_pct = round((net_change / close_p) * 100.0, 2) if close_p > 0 else 0.0
+                            volume = float(q.get("volume", 0.0))
                             quotes[sym] = {
-                                "ltp": float(q.get("last_price", 0.0)),
-                                "open": float(q.get("ohlc", {}).get("open", 0.0)),
-                                "high": float(q.get("ohlc", {}).get("high", 0.0)),
-                                "low": float(q.get("ohlc", {}).get("low", 0.0)),
-                                "close": float(q.get("ohlc", {}).get("close", 0.0)),
-                                "volume": float(q.get("volume", 0.0)),
+                                "ltp": round(ltp, 2),
+                                "change": round(net_change, 2),
+                                "change_pct": change_pct,
+                                "open": round(open_p, 2),
+                                "high": round(high_p, 2),
+                                "low": round(low_p, 2),
+                                "close": round(close_p, 2),
+                                "volume": volume,
                                 "source": "upstox_live"
                             }
-                    if len(quotes) == len(symbols):
-                        return quotes
             except Exception as e:
                 logger.warning(f"Upstox live quote fetch failed: {e}")
 
-        # 2. Fallback to latest historical price with realistic intra-day jitter
-        hist_df = self.fetch_historical_prices(symbols, start_date="2024-01-01")
-        for sym in symbols:
-            if sym in hist_df.columns:
-                last_price = float(hist_df[sym].iloc[-1])
-                prev_price = float(hist_df[sym].iloc[-2]) if len(hist_df) > 1 else last_price
-                change = last_price - prev_price
-                quotes[sym] = {
-                    "ltp": round(last_price, 2),
-                    "change": round(change, 2),
-                    "change_pct": round((change / prev_price) * 100, 2) if prev_price > 0 else 0.0,
-                    "open": round(last_price * 0.998, 2),
-                    "high": round(last_price * 1.012, 2),
-                    "low": round(last_price * 0.991, 2),
-                    "close": round(prev_price, 2),
-                    "volume": 1_250_000,
-                    "source": "paper_feed"
-                }
-            else:
-                quotes[sym] = {
-                    "ltp": 1500.0,
-                    "change": 0.0,
-                    "change_pct": 0.0,
-                    "open": 1500.0,
-                    "high": 1515.0,
-                    "low": 1490.0,
-                    "close": 1500.0,
-                    "volume": 500_000,
-                    "source": "paper_feed"
-                }
+        # 2. Fill missing symbols using latest historical prices
+        missing = [s for s in symbols if s not in quotes]
+        if missing:
+            try:
+                hist_df = self.fetch_historical_prices(missing, start_date="2024-01-01")
+                for sym in missing:
+                    if sym in hist_df.columns:
+                        last_price = float(hist_df[sym].iloc[-1])
+                        prev_price = float(hist_df[sym].iloc[-2]) if len(hist_df) > 1 else last_price
+                        change = last_price - prev_price
+                        quotes[sym] = {
+                            "ltp": round(last_price, 2),
+                            "change": round(change, 2),
+                            "change_pct": round((change / prev_price) * 100, 2) if prev_price > 0 else 0.0,
+                            "open": round(last_price * 0.998, 2),
+                            "high": round(last_price * 1.012, 2),
+                            "low": round(last_price * 0.991, 2),
+                            "close": round(prev_price, 2),
+                            "volume": 1_250_000,
+                            "source": "paper_feed"
+                        }
+                    else:
+                        quotes[sym] = {
+                            "ltp": 1500.0,
+                            "change": 0.0,
+                            "change_pct": 0.0,
+                            "open": 1500.0,
+                            "high": 1515.0,
+                            "low": 1490.0,
+                            "close": 1500.0,
+                            "volume": 500_000,
+                            "source": "paper_feed"
+                        }
+            except Exception as e:
+                logger.warning(f"Fallback historical prices for quotes error: {e}")
+                for sym in missing:
+                    quotes[sym] = {
+                        "ltp": 1500.0,
+                        "change": 0.0,
+                        "change_pct": 0.0,
+                        "open": 1500.0,
+                        "high": 1515.0,
+                        "low": 1490.0,
+                        "close": 1500.0,
+                        "volume": 500_000,
+                        "source": "paper_feed"
+                    }
 
         return quotes
 

@@ -205,10 +205,16 @@ def get_portfolio_state(db: Session = Depends(get_db)):
         quotes = provider.get_live_quotes(quote_targets)
         current_prices = {s: q["ltp"] for s, q in quotes.items()}
 
-    # Fallback to recorded position prices if quote is missing
+    # Fallback to recorded position prices if quote is missing, and persist live price
     for p in positions:
-        if p.ticker not in current_prices or current_prices[p.ticker] <= 0:
+        if p.ticker in current_prices and current_prices[p.ticker] > 0:
+            p.current_price = current_prices[p.ticker]
+        elif p.ticker not in current_prices or current_prices[p.ticker] <= 0:
             current_prices[p.ticker] = p.current_price or p.avg_price or 1000.0
+    try:
+        db.commit()
+    except Exception:
+        pass
 
     state = broker.get_portfolio_state(current_prices)
     

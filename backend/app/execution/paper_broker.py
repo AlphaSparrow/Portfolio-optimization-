@@ -65,20 +65,21 @@ class PaperBroker:
         if not needs_reseed:
             return
 
-        # Seed initial realistic positions
+        # Seed initial realistic positions matching true market prices from 2021 inception
         initial_stocks = [
-            ("RELIANCE.NS", 220, 920.0, 1167.7),
-            ("TCS.NS", 110, 1750.0, 2075.0),
-            ("HDFCBANK.NS", 320, 620.0, 721.2),
-            ("INFY.NS", 195, 910.0, 1035.0),
-            ("BHARTIARTL.NS", 115, 1280.0, 1741.1),
-            ("ITC.NS", 450, 210.0, 255.9),
-            ("LT.NS", 32, 2850.0, 3693.4),
+            ("RELIANCE.NS", 200, 897.05, 1167.70),
+            ("TCS.NS", 55, 2521.07, 2075.00),
+            ("HDFCBANK.NS", 240, 663.91, 721.20),
+            ("INFY.NS", 130, 1086.10, 1035.00),
+            ("BHARTIARTL.NS", 245, 488.07, 1741.10),
+            ("ITC.NS", 500, 159.72, 255.90),
+            ("LT.NS", 65, 1218.87, 3693.40),
         ]
 
         # Ensure positions match the portfolio holdings
         self.db.query(Position).filter(Position.portfolio_id == self.portfolio_id).delete()
         invested_total = 0.0
+        invested_cost = 0.0
         for sym, shares, avg_p, curr_p in initial_stocks:
             pos = Position(
                 portfolio_id=self.portfolio_id,
@@ -89,17 +90,22 @@ class PaperBroker:
             )
             self.db.add(pos)
             invested_total += shares * curr_p
+            invested_cost += shares * avg_p
+
+        # Portfolio capital accounting: Initial capital = ₹10,00,000
+        init_cap = float(portfolio.initial_capital or settings.DEFAULT_INITIAL_CASH)
+        initial_cash = max(10_000.0, init_cap - invested_cost)
 
         # Clear existing orders to avoid duplicates
         self.db.query(Order).filter(Order.portfolio_id == self.portfolio_id).delete()
         human_orders = [
-            ("RELIANCE.NS", "BUY", 220, 920.0, 921.5, 34.2, "2024-01-15 09:34:12", "FILLED"),
-            ("TCS.NS", "BUY", 110, 1750.0, 1752.1, 28.5, "2024-01-15 09:48:40", "FILLED"),
-            ("HDFCBANK.NS", "BUY", 320, 620.0, 621.0, 24.1, "2024-01-16 10:15:22", "FILLED"),
-            ("INFY.NS", "BUY", 195, 910.0, 911.2, 22.8, "2024-02-05 11:42:05", "FILLED"),
-            ("BHARTIARTL.NS", "BUY", 115, 1280.0, 1281.4, 25.3, "2024-04-18 14:35:50", "FILLED"),
-            ("ITC.NS", "BUY", 450, 210.0, 210.5, 21.0, "2024-06-05 09:25:30", "FILLED"),
-            ("LT.NS", "BUY", 32, 2850.0, 2853.2, 26.4, "2024-07-22 13:10:44", "FILLED"),
+            ("RELIANCE.NS", "BUY", 200, 897.05, 897.50, 32.1, "2021-01-04 09:30:15", "FILLED"),
+            ("TCS.NS", "BUY", 55, 2521.07, 2522.00, 31.5, "2021-01-04 09:35:20", "FILLED"),
+            ("HDFCBANK.NS", "BUY", 240, 663.91, 664.20, 26.4, "2021-01-04 09:40:44", "FILLED"),
+            ("INFY.NS", "BUY", 130, 1086.10, 1087.00, 28.0, "2021-01-04 09:45:10", "FILLED"),
+            ("BHARTIARTL.NS", "BUY", 245, 488.07, 488.50, 24.2, "2021-01-04 09:50:30", "FILLED"),
+            ("ITC.NS", "BUY", 500, 159.72, 160.00, 22.0, "2021-01-04 09:55:00", "FILLED"),
+            ("LT.NS", "BUY", 65, 1218.87, 1220.00, 25.8, "2021-01-04 10:00:15", "FILLED"),
         ]
         for sym, o_type, shrs, req_p, fill_p, fees, dt_str, st in human_orders:
             exec_time = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
@@ -117,10 +123,10 @@ class PaperBroker:
             )
             self.db.add(ord_entry)
 
-        # Clear old DailyNAV records to replace with continuous multi-year real price history starting at initial_capital
+        # Clear old DailyNAV records to replace with continuous multi-year real price history
         self.db.query(DailyNAV).filter(DailyNAV.portfolio_id == self.portfolio_id).delete()
 
-        # Seed DailyNAV series over 5+ years of real historical trading days
+        # Seed DailyNAV series from daily mark-to-market valuations
         from backend.app.data.market_data import MarketDataProvider
         provider = MarketDataProvider()
         stock_syms = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS"]
@@ -131,38 +137,28 @@ class PaperBroker:
 
         nav_entries = []
         if hist_prices is not None and not hist_prices.empty:
-            rets = hist_prices.pct_change().fillna(0.0)
-            weights = {
-                "RELIANCE.NS": 0.18, "TCS.NS": 0.16, "HDFCBANK.NS": 0.16,
-                "INFY.NS": 0.14, "BHARTIARTL.NS": 0.14, "ITC.NS": 0.08, "LT.NS": 0.08
-            }
-            cash_w = 0.06
-            daily_port_rets = sum(weights[s] * rets[s] for s in weights if s in rets.columns) + cash_w * (0.065 / 252.0)
-            cum_growth = (1.0 + daily_port_rets).cumprod()
+            daily_rf = (settings.DEFAULT_RISK_FREE_RATE) / 252.0
+            n_days = len(hist_prices)
+            cash_series = initial_cash * ((1.0 + daily_rf) ** np.arange(n_days))
+            stocks_dict = {sym: shares for sym, shares, _, _ in initial_stocks}
 
-            start_val = portfolio.initial_capital or 1_000_000.0
-            port_series = [round(start_val * cg, 2) for cg in cum_growth]
-            # Ensure day 0 is exactly start_val
-            port_series[0] = start_val
-
-            # Set cash to match latest compounded NAV minus invested equity
-            latest_nav = port_series[-1]
-            cash_left = max(50_000.0, round(latest_nav - invested_total, 2))
-            portfolio.current_cash = cash_left
-            portfolio.initial_capital = 1_000_000.0
-
-            for t, (dt, _) in enumerate(hist_prices.iterrows()):
+            for t, (dt, row) in enumerate(hist_prices.iterrows()):
                 dt_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)
-                val = port_series[t]
-                c_val = round(val * (cash_left / latest_nav), 2)
-                inv_val = round(val - c_val, 2)
+                inv_val = sum(float(row[s]) * stocks_dict[s] for s in stock_syms if s in row)
+                c_val = float(cash_series[t])
+                tot_nav = round(inv_val + c_val, 2)
+
                 nav_entries.append(DailyNAV(
                     portfolio_id=self.portfolio_id,
                     date=dt_str,
-                    nav=val,
-                    cash=c_val,
-                    invested_value=inv_val
+                    nav=tot_nav,
+                    cash=round(c_val, 2),
+                    invested_value=round(inv_val, 2)
                 ))
+
+            # Set current cash to the latest compounded cash value
+            portfolio.current_cash = round(float(cash_series[-1]), 2)
+            portfolio.initial_capital = init_cap
         else:
             start_date = datetime.date.today() - datetime.timedelta(days=365 * 4)
             dates = pd.date_range(start=start_date, end=datetime.date.today(), freq="B").date
@@ -502,8 +498,11 @@ class PaperBroker:
         for h in holdings:
             h["weight"] = round(h["market_value"] / total_nav, 4) if total_nav > 0 else 0.0
 
+        unrealized_pnl = sum(h["unrealized_pnl"] for h in holdings)
+        unrealized_pnl_pct = round((unrealized_pnl / total_cost) * 100.0, 2) if total_cost > 0 else 0.0
+
         total_pnl = total_nav - portfolio.initial_capital
-        total_pnl_pct = (total_pnl / portfolio.initial_capital) * 100.0 if portfolio.initial_capital > 0 else 0.0
+        total_pnl_pct = round((total_pnl / portfolio.initial_capital) * 100.0, 2) if portfolio.initial_capital > 0 else 0.0
 
         return {
             "nav": round(total_nav, 2),
@@ -511,6 +510,8 @@ class PaperBroker:
             "invested_value": round(invested_value, 2),
             "total_pnl": round(total_pnl, 2),
             "total_pnl_pct": round(total_pnl_pct, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
             "initial_capital": round(portfolio.initial_capital, 2),
             "cash_pct": round((portfolio.current_cash / total_nav) * 100.0, 2) if total_nav > 0 else 100.0,
             "holdings": sorted(holdings, key=lambda x: x["market_value"], reverse=True)
