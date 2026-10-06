@@ -1,5 +1,5 @@
 """
-Walk-Forward Out-of-Sample Backtest Engine.
+
 Runs point-in-time quantitative backtests across:
 - RMT Trend Momentum (Default - Kinetic 200 SMA + EMA Acceleration + RMT Denoised Covariance + 15% Trailing Stop)
 - Maximum Sharpe
