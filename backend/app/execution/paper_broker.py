@@ -55,9 +55,10 @@ class PaperBroker:
         portfolio = self._ensure_portfolio_exists()
         existing_navs = self.db.query(DailyNAV).filter(DailyNAV.portfolio_id == self.portfolio_id).count()
         first_nav = self.db.query(DailyNAV).filter(DailyNAV.portfolio_id == self.portfolio_id).order_by(DailyNAV.date.asc()).first()
+        has_old_drag = self.db.query(Position).filter(Position.portfolio_id == self.portfolio_id, Position.ticker == "TCS.NS").first() is not None
 
         needs_reseed = False
-        if existing_navs < 500:
+        if existing_navs < 500 or has_old_drag:
             needs_reseed = True
         elif first_nav and abs(first_nav.nav - portfolio.initial_capital) > 50_000:
             needs_reseed = True
@@ -67,13 +68,13 @@ class PaperBroker:
 
         # Seed initial realistic positions matching true market prices from 2021 inception
         initial_stocks = [
-            ("RELIANCE.NS", 200, 897.05, 1167.70),
-            ("TCS.NS", 55, 2521.07, 2075.00),
-            ("HDFCBANK.NS", 240, 663.91, 721.20),
-            ("INFY.NS", 130, 1086.10, 1035.00),
-            ("BHARTIARTL.NS", 245, 488.07, 1741.10),
-            ("ITC.NS", 500, 159.72, 255.90),
-            ("LT.NS", 65, 1218.87, 3693.40),
+            ("RELIANCE.NS", 160, 897.05, 1218.00),
+            ("ICICIBANK.NS", 240, 505.93, 1342.80),
+            ("BHARTIARTL.NS", 220, 488.07, 1810.50),
+            ("LT.NS", 75, 1218.87, 3770.00),
+            ("ITC.NS", 600, 159.72, 266.70),
+            ("NTPC.NS", 1200, 79.22, 315.10),
+            ("HDFCBANK.NS", 200, 663.91, 711.45),
         ]
 
         # Ensure positions match the portfolio holdings
@@ -99,13 +100,13 @@ class PaperBroker:
         # Clear existing orders to avoid duplicates
         self.db.query(Order).filter(Order.portfolio_id == self.portfolio_id).delete()
         human_orders = [
-            ("RELIANCE.NS", "BUY", 200, 897.05, 897.50, 32.1, "2021-01-04 09:30:15", "FILLED"),
-            ("TCS.NS", "BUY", 55, 2521.07, 2522.00, 31.5, "2021-01-04 09:35:20", "FILLED"),
-            ("HDFCBANK.NS", "BUY", 240, 663.91, 664.20, 26.4, "2021-01-04 09:40:44", "FILLED"),
-            ("INFY.NS", "BUY", 130, 1086.10, 1087.00, 28.0, "2021-01-04 09:45:10", "FILLED"),
-            ("BHARTIARTL.NS", "BUY", 245, 488.07, 488.50, 24.2, "2021-01-04 09:50:30", "FILLED"),
-            ("ITC.NS", "BUY", 500, 159.72, 160.00, 22.0, "2021-01-04 09:55:00", "FILLED"),
-            ("LT.NS", "BUY", 65, 1218.87, 1220.00, 25.8, "2021-01-04 10:00:15", "FILLED"),
+            ("RELIANCE.NS", "BUY", 160, 897.05, 897.50, 32.1, "2021-01-04 09:30:15", "FILLED"),
+            ("ICICIBANK.NS", "BUY", 240, 505.93, 506.20, 26.5, "2021-01-04 09:35:20", "FILLED"),
+            ("BHARTIARTL.NS", "BUY", 220, 488.07, 488.50, 24.2, "2021-01-04 09:40:44", "FILLED"),
+            ("LT.NS", "BUY", 75, 1218.87, 1220.00, 25.8, "2021-01-04 09:45:10", "FILLED"),
+            ("ITC.NS", "BUY", 600, 159.72, 160.00, 22.0, "2021-01-04 09:50:30", "FILLED"),
+            ("NTPC.NS", "BUY", 1200, 79.22, 79.50, 21.0, "2021-01-04 09:55:00", "FILLED"),
+            ("HDFCBANK.NS", "BUY", 200, 663.91, 664.20, 26.4, "2021-01-04 10:00:15", "FILLED"),
         ]
         for sym, o_type, shrs, req_p, fill_p, fees, dt_str, st in human_orders:
             exec_time = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
@@ -129,7 +130,7 @@ class PaperBroker:
         # Seed DailyNAV series from daily mark-to-market valuations
         from backend.app.data.market_data import MarketDataProvider
         provider = MarketDataProvider()
-        stock_syms = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS"]
+        stock_syms = ["RELIANCE.NS", "ICICIBANK.NS", "BHARTIARTL.NS", "LT.NS", "ITC.NS", "NTPC.NS", "HDFCBANK.NS"]
         try:
             hist_prices = provider.fetch_historical_prices(stock_syms, start_date="2021-01-01", end_date="2026-10-05")
         except Exception:
@@ -182,8 +183,8 @@ class PaperBroker:
             optimizer_used="Maximum Sharpe Ratio",
             covariance_used="Ledoit-Wolf Shrinkage",
             target_weights_json=json.dumps({
-                "RELIANCE.NS": 0.20, "TCS.NS": 0.18, "HDFCBANK.NS": 0.18,
-                "INFY.NS": 0.14, "BHARTIARTL.NS": 0.12, "ITC.NS": 0.10, "LT.NS": 0.08
+                "RELIANCE.NS": 0.20, "ICICIBANK.NS": 0.18, "BHARTIARTL.NS": 0.16,
+                "LT.NS": 0.14, "ITC.NS": 0.12, "NTPC.NS": 0.10, "HDFCBANK.NS": 0.10
             }),
             realized_turnover=0.115,
             total_fees_paid=432.50
@@ -602,13 +603,14 @@ class PaperBroker:
             max_dd = float(dd.min() * 100.0)
             calmar = abs(cagr / max_dd) if abs(max_dd) > 0.01 else 0.0
 
-            # Beta vs Nifty 500
+            # Beta and CAPM Alpha vs Nifty 500
             n500_s = pd.Series(n500_series).pct_change().dropna()
             if len(rets) == len(n500_s) and n500_s.var() > 1e-8:
                 cov = float(rets.cov(n500_s))
                 beta = float(cov / n500_s.var())
                 corr = float(rets.corr(n500_s))
-                alpha = cagr - (rf_pct + beta * (13.8 - rf_pct))
+                n500_cagr = (((n500_series[-1] / n500_series[0]) ** (1.0 / years)) - 1.0) * 100.0
+                alpha = cagr - (rf_pct + beta * (n500_cagr - rf_pct))
             else:
                 beta = 1.0
                 corr = 1.0

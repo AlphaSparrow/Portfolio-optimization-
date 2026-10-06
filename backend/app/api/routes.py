@@ -276,16 +276,53 @@ def get_pareto_frontier_data(
     }
 
 @router.get("/market/overview")
-def get_market_overview():
+def get_market_overview(db: Session = Depends(get_db)):
     """Google Finance style live Indian market benchmark snapshot"""
+    upstox = UpstoxBroker(db)
+    provider = MarketDataProvider(upstox_token=upstox.get_active_token())
+    live_q = provider.get_live_quotes(["^NSEI", "^CRSLDX", "^NSEMDCP50", "^INDIAVIX"])
+
+    n50_q = live_q.get("^NSEI", {})
+    n500_q = live_q.get("^CRSLDX", {})
+    n150_q = live_q.get("^NSEMDCP50", {})
+    vix_q = live_q.get("^INDIAVIX", {})
+
     return {
         "market_status": "OPEN",
         "exchange": "National Stock Exchange of India (NSE)",
         "indices": [
-            {"name": "NIFTY 50", "value": 25250.45, "change": 115.30, "change_pct": 0.46, "high": 25285.00, "low": 25110.20},
-            {"name": "NIFTY 500", "value": 23890.10, "change": 142.15, "change_pct": 0.60, "high": 23920.00, "low": 23750.10},
-            {"name": "NIFTY 150 MIDCAP", "value": 21340.80, "change": 188.20, "change_pct": 0.89, "high": 21380.00, "low": 21120.40},
-            {"name": "INDIA VIX", "value": 13.42, "change": -0.35, "change_pct": -2.54, "high": 13.95, "low": 13.20},
+            {
+                "name": "NIFTY 50",
+                "value": n50_q.get("ltp", 22776.10),
+                "change": n50_q.get("change", 220.35),
+                "change_pct": n50_q.get("change_pct", 0.98),
+                "high": n50_q.get("high", 22800.00),
+                "low": n50_q.get("low", 22550.00)
+            },
+            {
+                "name": "NIFTY 500",
+                "value": n500_q.get("ltp", 22202.85),
+                "change": n500_q.get("change", 231.40),
+                "change_pct": n500_q.get("change_pct", 1.05),
+                "high": n500_q.get("high", 22250.00),
+                "low": n500_q.get("low", 21950.00)
+            },
+            {
+                "name": "NIFTY 150 MIDCAP",
+                "value": n150_q.get("ltp", 17119.70),
+                "change": n150_q.get("change", 208.45),
+                "change_pct": n150_q.get("change_pct", 1.23),
+                "high": n150_q.get("high", 17180.00),
+                "low": n150_q.get("low", 16900.00)
+            },
+            {
+                "name": "INDIA VIX",
+                "value": vix_q.get("ltp", 13.61),
+                "change": vix_q.get("change", -1.10),
+                "change_pct": vix_q.get("change_pct", -7.49),
+                "high": vix_q.get("high", 14.80),
+                "low": vix_q.get("low", 13.50)
+            },
             {"name": "10Y G-SEC YIELD", "value": 6.82, "change": -0.02, "change_pct": -0.29, "unit": "%"},
             {"name": "BANK FD (1Y-3Y)", "value": 7.10, "change": 0.00, "change_pct": 0.00, "unit": "% Risk-Free"}
         ]

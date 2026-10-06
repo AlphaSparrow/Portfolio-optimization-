@@ -67,7 +67,19 @@ class MarketDataProvider:
             if df is not None and not df.empty and len(df) >= 15:
                 return df.ffill().bfill().dropna()
 
-        # Attempt 2: Master cache files
+        # Attempt 2: Live yfinance fetch for real-time market data
+        df = self._fetch_yfinance_historical(symbols, start_date, end_date)
+        if df is not None and not df.empty and len(df) >= 15:
+            avail = [s for s in symbols if s in df.columns]
+            if len(avail) == len(symbols) or (len(symbols) >= 3 and len(avail) >= 2):
+                try:
+                    cache_path = CACHE_DIR / cache_key
+                    df.to_pickle(cache_path)
+                except Exception:
+                    pass
+                return df.ffill().bfill().dropna()
+
+        # Attempt 3: Master cache files fallback (resilient offline/air-gapped execution)
         for master_file in candidate_files:
             for c_dir in candidate_dirs:
                 master_path = c_dir / master_file
@@ -84,12 +96,6 @@ class MarketDataProvider:
                                 return sub_df
                     except Exception as e:
                         logger.debug(f"Could not load from {master_file}: {e}")
-
-        # Attempt 3: yfinance fallback
-        if df is None or df.empty:
-            df = self._fetch_yfinance_historical(symbols, start_date, end_date)
-            if df is not None and not df.empty and len(df) >= 15:
-                return df.ffill().bfill().dropna()
 
         # Attempt 4: Partial slice from master cache
         if df is None or df.empty:
@@ -207,15 +213,15 @@ class MarketDataProvider:
                 end=real_end,
                 auto_adjust=True,
                 progress=False,
-                threads=False,
-                timeout=3
+                threads=True,
+                timeout=10
             )
             return data
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(_do_download)
-                data = future.result(timeout=4.0)
+                data = future.result(timeout=12.0)
 
             if data is not None and not data.empty:
                 if "Close" in data:
@@ -226,6 +232,7 @@ class MarketDataProvider:
                 if isinstance(close_df, pd.Series):
                     close_df = close_df.to_frame(name=symbols[0])
 
+                close_df = close_df.dropna(how="all")
                 close_df.index = pd.to_datetime(close_df.index).date
                 valid_cols = [c for c in symbols if c in close_df.columns and close_df[c].notna().sum() > 10]
                 if valid_cols:
@@ -235,10 +242,47 @@ class MarketDataProvider:
             logger.warning(f"yfinance fetch error or timeout: {e}")
         return None
 
+    def _fetch_yfinance_live_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch real-time market quotes via yfinance fast_info"""
+        y_quotes: Dict[str, Dict[str, Any]] = {}
+        try:
+            import yfinance as yf
+            tickers = yf.Tickers(symbols)
+            for sym in symbols:
+                try:
+                    t = tickers.tickers.get(sym) or yf.Ticker(sym)
+                    fi = getattr(t, "fast_info", None)
+                    if fi:
+                        ltp = float(getattr(fi, "last_price", 0.0) or 0.0)
+                        prev = float(getattr(fi, "previous_close", 0.0) or getattr(fi, "regular_market_previous_close", ltp) or ltp)
+                        open_p = float(getattr(fi, "open", ltp) or ltp)
+                        high_p = float(getattr(fi, "day_high", ltp) or ltp)
+                        low_p = float(getattr(fi, "day_low", ltp) or ltp)
+                        vol = float(getattr(fi, "last_volume", 0.0) or 0.0)
+                        change = ltp - prev if prev > 0 else 0.0
+                        change_pct = round((change / prev) * 100.0, 2) if prev > 0 else 0.0
+                        if ltp > 0:
+                            y_quotes[sym] = {
+                                "ltp": round(ltp, 2),
+                                "change": round(change, 2),
+                                "change_pct": change_pct,
+                                "open": round(open_p, 2),
+                                "high": round(high_p, 2),
+                                "low": round(low_p, 2),
+                                "close": round(prev, 2),
+                                "volume": vol,
+                                "source": "yfinance_live"
+                            }
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"yfinance live quote fetch error: {e}")
+        return y_quotes
+
     def get_live_quotes(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Get live quote (LTP, change, high, low, volume) for symbols.
-        Uses Upstox API v2 if authenticated, otherwise master cache/feed fallback.
+        Uses Upstox API v2 if authenticated, otherwise real-time yfinance live quotes with cache fallback.
         """
         quotes: Dict[str, Dict[str, Any]] = {}
 
@@ -303,7 +347,13 @@ class MarketDataProvider:
             except Exception as e:
                 logger.warning(f"Upstox live quote fetch failed: {e}")
 
-        # 2. Fill missing symbols using latest historical prices
+        # 2. Fetch real-time live quotes via yfinance for all uncollected symbols
+        missing_live = [s for s in symbols if s not in quotes]
+        if missing_live:
+            yf_quotes = self._fetch_yfinance_live_quotes(missing_live)
+            quotes.update(yf_quotes)
+
+        # 3. Fallback to latest historical prices only for any symbols that failed both live feeds
         missing = [s for s in symbols if s not in quotes]
         if missing:
             try:
